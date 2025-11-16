@@ -24,7 +24,6 @@ jobs:
 
     - name: Install Python dependencies
       run: |
-        cd web-app
         pip install -r requirements.txt
 
     - name: Install Ngrok
@@ -46,7 +45,7 @@ jobs:
     - name: Start Flask server with wait
       run: |
         echo "Starting Flask server..."
-        cd web-app
+        
         python app.py &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
@@ -139,7 +138,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ai-images
-        path: web-app/outputs/
+        path: outputs/
         retention-days: 30
         if-no-files-found: warn
 
