@@ -1,23 +1,18 @@
 - name: Create animation
   run: |
     pip install imageio numpy pillow
-    python -c "
+    python -c '
 import numpy as np
 from PIL import Image, ImageDraw
 import imageio
-import os
-
-# Create outputs directory
-os.makedirs('outputs', exist_ok=True)
 
 frames = []
 for i in range(10):
-    img = Image.new('RGB', (200, 200), color='blue')
+    img = Image.new("RGB", (200, 200), color="blue")
     draw = ImageDraw.Draw(img)
-    draw.ellipse([50+i*5, 50, 100+i*5, 100], fill='red')
-    draw.text((10, 10), f'Frame {i+1}', fill='white')
+    draw.ellipse([50+i*5, 50, 100+i*5, 100], fill="red")
     frames.append(np.array(img))
 
-imageio.mimsave('outputs/animation.gif', frames, duration=0.5)
-print('✅ Animation created: outputs/animation.gif')
-"
+imageio.mimsave("animation.gif", frames, duration=0.5)
+print("Done")
+'
