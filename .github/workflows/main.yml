@@ -1,0 +1,318 @@
+name: Text-to-Video Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text prompt for video generation'
+        required: true
+        default: 'A beautiful sunset over mountains'
+      animation_style:
+        description: 'Type of animation'
+        required: true
+        default: 'particles'
+        type: choice
+        options:
+          - 'particles'
+          - 'waves'
+          - 'geometric'
+          - 'text-scroll'
+      duration:
+        description: 'Video duration in seconds'
+        required: true
+        default: 5
+        type: number
+
+jobs:
+  generate-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        pip install pillow imageio numpy
+
+    - name: Create outputs directory
+      run: mkdir -p outputs
+
+    - name: Generate animated video
+      env:
+        PROMPT: ${{ github.event.inputs.prompt }}
+        ANIMATION_STYLE: ${{ github.event.inputs.animation_style }}
+        DURATION: ${{ github.event.inputs.duration }}
+      run: |
+        echo "Generating video for: $PROMPT"
+        echo "Animation style: $ANIMATION_STYLE"
+        echo "Duration: ${DURATION}s"
+        
+        cat > video_generator.py << 'EOF'
+import os
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import imageio
+import math
+import datetime
+
+def create_particle_animation(prompt, width, height, duration_seconds, fps=10):
+    """Create particle animation based on prompt"""
+    frames = []
+    total_frames = duration_seconds * fps
+    
+    for frame_num in range(total_frames):
+        # Create gradient background
+        img = Image.new('RGB', (width, height), color='black')
+        draw = ImageDraw.Draw(img)
+        
+        # Time-based animation
+        t = frame_num / total_frames
+        
+        # Animated gradient background
+        for y in range(0, height, 2):
+            # Create rainbow gradient that moves over time
+            r = int(128 + 127 * math.sin(2 * math.pi * (t + y/height)))
+            g = int(128 + 127 * math.sin(2 * math.pi * (t + y/height + 0.33)))
+            b = int(128 + 127 * math.sin(2 * math.pi * (t + y/height + 0.66)))
+            draw.line([(0, y), (width, y)], fill=(r, g, b), width=2)
+        
+        # Add moving particles
+        num_particles = 50
+        for i in range(num_particles):
+            angle = 2 * math.pi * i / num_particles + t * 2 * math.pi
+            radius = 100 + 50 * math.sin(t * 4 + i * 0.5)
+            x = width // 2 + int(radius * math.cos(angle))
+            y = height // 2 + int(radius * math.sin(angle))
+            size = 3 + 2 * math.sin(t * 8 + i)
+            draw.ellipse([x-size, y-size, x+size, y+size], fill='white')
+        
+        # Add text with glow effect
+        text_lines = [
+            "AI Generated Video",
+            f"Prompt: {prompt}",
+            f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}",
+            f"Frame: {frame_num + 1}/{total_frames}"
+        ]
+        
+        for i, line in enumerate(text_lines):
+            # Text shadow
+            draw.text((12, height - 120 + i*25), line, fill='black')
+            # Main text
+            draw.text((10, height - 122 + i*25), line, fill='white')
+        
+        frames.append(np.array(img))
+    
+    return frames
+
+def create_wave_animation(prompt, width, height, duration_seconds, fps=10):
+    """Create wave animation"""
+    frames = []
+    total_frames = duration_seconds * fps
+    
+    for frame_num in range(total_frames):
+        img = Image.new('RGB', (width, height), color='navy')
+        draw = ImageDraw.Draw(img)
+        
+        t = frame_num / total_frames
+        
+        # Draw animated waves
+        for y in range(height // 2, height, 5):
+            wave_height = 20 * math.sin(2 * math.pi * (t * 2 + y/50))
+            for x in range(0, width, 10):
+                x_pos = x + 5 * math.sin(2 * math.pi * (t + x/100 + y/50))
+                y_pos = y + wave_height
+                draw.ellipse([x_pos-2, y_pos-2, x_pos+2, y_pos+2], fill='lightblue')
+        
+        # Sun/moon
+        sun_x = width // 4
+        sun_y = height // 4 + 20 * math.sin(t * 2 * math.pi)
+        sun_size = 30 + 5 * math.sin(t * 4 * math.pi)
+        draw.ellipse([sun_x-sun_size, sun_y-sun_size, sun_x+sun_size, sun_y+sun_size], 
+                    fill='yellow' if t < 0.5 else 'white')
+        
+        # Text
+        draw.text((50, 50), f"Prompt: {prompt}", fill='white')
+        draw.text((50, 80), f"Frame: {frame_num+1}/{total_frames}", fill='white')
+        
+        frames.append(np.array(img))
+    
+    return frames
+
+def create_geometric_animation(prompt, width, height, duration_seconds, fps=10):
+    """Create geometric pattern animation"""
+    frames = []
+    total_frames = duration_seconds * fps
+    
+    for frame_num in range(total_frames):
+        img = Image.new('RGB', (width, height), color='darkblue')
+        draw = ImageDraw.Draw(img)
+        
+        t = frame_num / total_frames
+        
+        # Rotating geometric patterns
+        center_x, center_y = width // 2, height // 2
+        max_radius = min(width, height) // 2 - 20
+        
+        for i in range(8):
+            angle = 2 * math.pi * i / 8 + t * 2 * math.pi
+            radius = max_radius * (0.5 + 0.3 * math.sin(t * 4 * math.pi + i))
+            
+            x = center_x + int(radius * math.cos(angle))
+            y = center_y + int(radius * math.sin(angle))
+            
+            # Draw rotating shapes
+            if i % 3 == 0:
+                # Circle
+                draw.ellipse([x-15, y-15, x+15, y+15], 
+                           fill='red', outline='white')
+            elif i % 3 == 1:
+                # Square
+                draw.rectangle([x-12, y-12, x+12, y+12], 
+                             fill='green', outline='white')
+            else:
+                # Triangle
+                draw.polygon([(x, y-15), (x-13, y+10), (x+13, y+10)], 
+                           fill='yellow', outline='white')
+        
+        # Text
+        draw.text((width//2 - 100, 30), "GEOMETRIC ANIMATION", fill='white')
+        draw.text((50, height - 80), f"Prompt: {prompt}", fill='white')
+        draw.text((50, height - 50), f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}", fill='white')
+        
+        frames.append(np.array(img))
+    
+    return frames
+
+def create_text_scroll_animation(prompt, width, height, duration_seconds, fps=10):
+    """Create scrolling text animation"""
+    frames = []
+    total_frames = duration_seconds * fps
+    
+    for frame_num in range(total_frames):
+        img = Image.new('RGB', (width, height), color='purple')
+        draw = ImageDraw.Draw(img)
+        
+        t = frame_num / total_frames
+        
+        # Scrolling background pattern
+        for y in range(0, height, 20):
+            offset = int(t * 100) % 20
+            draw.rectangle([0, y-offset, width, y+10-offset], 
+                         fill='darkpurple', outline='white')
+        
+        # Scrolling text
+        scroll_x = (frame_num * 5) % (width + 200) - 100
+        draw.text((scroll_x, height // 2 - 20), 
+                 f"✨ {prompt} ✨", fill='white')
+        
+        # Fixed info text
+        draw.text((20, 20), "TEXT TO VIDEO GENERATOR", fill='white')
+        draw.text((20, height - 60), f"Frame: {frame_num+1}/{total_frames}", fill='white')
+        draw.text((20, height - 30), f"Duration: {duration_seconds}s", fill='white')
+        
+        frames.append(np.array(img))
+    
+    return frames
+
+def main():
+    # Get parameters
+    prompt = os.getenv('PROMPT', 'AI Generated Video')
+    animation_style = os.getenv('ANIMATION_STYLE', 'particles')
+    duration = int(os.getenv('DURATION', 5))
+    
+    print(f"🎬 Generating {duration}s {animation_style} video: {prompt}")
+    
+    # Video parameters
+    width, height = 640, 480
+    fps = 10
+    
+    # Choose animation style
+    if animation_style == 'particles':
+        frames = create_particle_animation(prompt, width, height, duration, fps)
+    elif animation_style == 'waves':
+        frames = create_wave_animation(prompt, width, height, duration, fps)
+    elif animation_style == 'geometric':
+        frames = create_geometric_animation(prompt, width, height, duration, fps)
+    elif animation_style == 'text-scroll':
+        frames = create_text_scroll_animation(prompt, width, height, duration, fps)
+    else:
+        frames = create_particle_animation(prompt, width, height, duration, fps)
+    
+    # Create timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save as GIF
+    gif_filename = f"outputs/video_{animation_style}_{timestamp}.gif"
+    imageio.mimsave(gif_filename, frames, fps=fps)
+    
+    # Save as MP4
+    mp4_filename = f"outputs/video_{animation_style}_{timestamp}.mp4"
+    imageio.mimsave(mp4_filename, frames, fps=fps)
+    
+    # Create info file
+    info_content = f"""🎬 VIDEO GENERATION SUCCESSFUL!
+
+Generated: {datetime.datetime.now()}
+Prompt: {prompt}
+Animation Style: {animation_style}
+Duration: {duration} seconds
+Resolution: {width}x{height}
+FPS: {fps}
+Total Frames: {len(frames)}
+
+Output Files:
+- {gif_filename}
+- {mp4_filename}
+
+Animation created with Python PIL & imageio
+No external AI models required!
+"""
+    
+    with open("outputs/generation_info.txt", "w") as f:
+        f.write(info_content)
+    
+    # Create thumbnail
+    if frames:
+        thumbnail = Image.fromarray(frames[0])
+        thumbnail.save("outputs/thumbnail.jpg")
+    
+    print(f"✅ Video generated successfully!")
+    print(f"📁 Files: {gif_filename}, {mp4_filename}")
+    print(f"📊 Stats: {len(frames)} frames, {width}x{height}, {fps}fps")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+        python video_generator.py
+
+    - name: Check generated files
+      run: |
+        echo "=== Generated Files ==="
+        ls -la outputs/
+        echo "=== File Sizes ==="
+        find outputs/ -name "*.gif" -o -name "*.mp4" -o -name "*.txt" | xargs ls -lh
+
+    - name: Upload video artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-videos
+        path: outputs/
+        retention-days: 30
+        if-no-files-found: error
+
+    - name: Success message
+      if: success()
+      run: |
+        echo "🎉 Video generation completed successfully!"
+        echo "📹 Download your video from the Artifacts section above"
+        echo "✨ Prompt: ${{ github.event.inputs.prompt }}"
+        echo "🎨 Style: ${{ github.event.inputs.animation_style }}"
+        echo "⏱️ Duration: ${{ github.event.inputs.duration }}s"
