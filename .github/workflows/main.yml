@@ -1,4 +1,4 @@
-name: Ngrok Tunnel Setup
+name: Manual Ngrok Setup
 
 on:
   workflow_dispatch:
@@ -6,90 +6,166 @@ on:
       port:
         description: 'Local port to expose'
         required: true
-        default: 8080
+        default: 3000
         type: number
 
 jobs:
-  ngrok-tunnel:
+  manual-ngrok:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Ngrok with official action
-      uses: ngrok/setup-ngrok@v1
-      with:
-        auth-token: ${{ secrets.NGROK_AUTH_TOKEN }}
+    - name: Install Ngrok manually
+      run: |
+        # Download and install ngrok
+        wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar -xzf ngrok-v3-stable-linux-amd64.tgz
+        sudo mv ngrok /usr/local/bin/
+        ngrok --version
+
+    - name: Configure Ngrok auth
+      run: |
+        ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+        echo "✅ Ngrok authenticated"
+
+    - name: Create Python test server
+      run: |
+        cat > server.py << 'EOF'
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import datetime
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        
+        response = f"""
+        <html>
+            <body>
+                <h1>🚀 Server via Ngrok</h1>
+                <p>Time: {datetime.datetime.now()}</p>
+                <p>Path: {self.path}</p>
+                <p>This server is exposed via Ngrok from GitHub Actions</p>
+                <h3>Endpoints:</h3>
+                <ul>
+                    <li><a href="/health">/health</a></li>
+                    <li><a href="/json">/json</a></li>
+                </ul>
+            </body>
+        </html>
+        """
+        self.wfile.write(response.encode())
+    
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        response = {
+            "status": "received",
+            "data": post_data.decode(),
+            "timestamp": str(datetime.datetime.now())
+        }
+        self.wfile.write(json.dumps(response).encode())
+
+if __name__ == '__main__':
+    port = 3000
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    print(f"Starting server on port {port}...")
+    server.serve_forever()
+EOF
+
+    - name: Start server in background
+      run: |
+        python server.py &
+        echo "SERVER_PID=$!" >> $GITHUB_ENV
+        sleep 3
 
     - name: Start Ngrok tunnel
       run: |
         ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
-        sleep 5
+        sleep 10
 
-    - name: Get Ngrok public URL
-      id: ngrok_url
+    - name: Get tunnel URL
+      id: tunnel
       run: |
-        # Wait for tunnel to be ready
-        sleep 5
-        
-        # Get the public URL from ngrok API
-        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-        
-        if [ "$NGROK_URL" = "null" ] || [ -z "$NGROK_URL" ]; then
-          echo "❌ Failed to get ngrok URL. Checking logs:"
-          cat ngrok.log
-          exit 1
-        fi
-        
+        # Get tunnel URL from ngrok API
+        max_retries=10
+        for i in $(seq 1 $max_retries); do
+          echo "Attempt $i to get tunnel URL..."
+          TUNNEL_RESPONSE=$(curl -s http://localhost:4040/api/tunnels || true)
+          TUNNEL_URL=$(echo "$TUNNEL_RESPONSE" | jq -r '.tunnels[0].public_url // empty')
+          
+          if [ -n "$TUNNEL_URL" ] && [ "$TUNNEL_URL" != "null" ]; then
+            echo "✅ Tunnel URL obtained: $TUNNEL_URL"
+            echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+            echo "NGROK_URL=$TUNNEL_URL" >> $GITHUB_ENV
+            break
+          fi
+          
+          if [ $i -eq $max_retries ]; then
+            echo "❌ Failed to get tunnel URL after $max_retries attempts"
+            echo "Ngrok log:"
+            cat ngrok.log
+            exit 1
+          fi
+          
+          sleep 5
+        done
+
+    - name: Display connection info
+      run: |
+        echo "=========================================="
+        echo "🌐 YOUR NGROK TUNNEL IS ACTIVE"
+        echo "=========================================="
         echo "Public URL: $NGROK_URL"
-        echo "ngrok_url=$NGROK_URL" >> $GITHUB_OUTPUT
-        echo "NGROK_PUBLIC_URL=$NGROK_URL" >> $GITHUB_ENV
-
-    - name: Display tunnel information
-      run: |
-        echo "🎯 Ngrok Tunnel Active"
-        echo "📡 Public URL: $NGROK_PUBLIC_URL"
-        echo "🔌 Local Port: ${{ github.event.inputs.port }}"
-        echo "📋 Protocol: HTTP"
+        echo "Local port: ${{ github.event.inputs.port }}"
+        echo "Test URL: $NGROK_URL/health"
+        echo "=========================================="
         
-        # Show detailed tunnel info
-        echo "📊 Tunnel Details:"
+        # Show tunnel details
+        echo "Tunnel details:"
         curl -s http://localhost:4040/api/tunnels | jq '.'
 
-    - name: Start test server
+    - name: Test endpoints
       run: |
-        # Start a simple HTTP server on the specified port
-        python -m http.server ${{ github.event.inputs.port }} &
-        echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 2
+        echo "Testing endpoints via ngrok..."
+        
+        # Test GET request
+        echo "GET $NGROK_URL/health"
+        curl -s "$NGROK_URL/health" | head -5
+        
+        # Test POST request
+        echo -e "\nPOST $NGROK_URL"
+        curl -s -X POST "$NGROK_URL" \
+          -H "Content-Type: application/json" \
+          -d '{"test": "data"}' | jq '.'
 
-    - name: Test the tunnel
+    - name: Monitor tunnel
       run: |
-        echo "Testing tunnel connection..."
-        if curl -f "$NGROK_PUBLIC_URL" > /dev/null 2>&1; then
-          echo "✅ Tunnel is working correctly!"
-        else
-          echo "❌ Tunnel test failed"
-          echo "Debug info:"
-          curl -s http://localhost:4040/api/tunnels | jq '.'
-        fi
-
-    - name: Keep tunnel alive
-      run: |
-        echo "🕐 Keeping tunnel active for 25 minutes..."
-        for i in {1..150}; do
-          minutes=$((i/6))
-          seconds=$((i%6*10))
-          echo "⏰ Tunnel active for ${minutes}m ${seconds}s - URL: $NGROK_PUBLIC_URL"
+        echo "📡 Tunnel monitoring active for 20 minutes..."
+        echo "🔗 Your URL: $NGROK_URL"
+        echo "⏰ This workflow will timeout after 20 minutes of inactivity"
+        
+        # Simple keep-alive
+        for i in {1..120}; do
+          echo "[$(date +%H:%M:%S)] Tunnel active - $NGROK_URL"
           sleep 10
         done
 
-    - name: Stop Ngrok tunnel
+    - name: Cleanup
       if: always()
       run: |
+        echo "🧹 Cleaning up processes..."
         pkill ngrok || true
         kill $SERVER_PID 2>/dev/null || true
-        echo "🛑 Ngrok tunnel stopped"
+        echo "✅ Cleanup complete"
