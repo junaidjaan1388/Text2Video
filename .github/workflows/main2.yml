@@ -1,11 +1,18 @@
-- name: Generate via API
+- name: Create animation
   run: |
-    pip install requests
+    pip install imageio numpy
     python -c "
-    import requests
-    # Use free image APIs instead of local models
-    response = requests.get('https://picsum.photos/512/512')
-    with open('outputs/image.jpg', 'wb') as f:
-        f.write(response.content)
-    print('Image downloaded')
+    import numpy as np
+    from PIL import Image, ImageDraw
+    import imageio
+    
+    frames = []
+    for i in range(10):
+        img = Image.new('RGB', (200, 200), color='blue')
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([50+i*5, 50, 100+i*5, 100], fill='red')
+        frames.append(np.array(img))
+    
+    imageio.mimsave('outputs/animation.gif', frames, duration=0.5)
+    print('Animation created')
     "
