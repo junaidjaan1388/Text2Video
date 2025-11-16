@@ -1,4 +1,4 @@
-- name: Create animation
+name: Create animation
   run: |
     pip install imageio numpy
     python -c "
