@@ -1,251 +1,198 @@
-name: Text-to-Image with Ngrok
+name: Text-to-Video Generator
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Text prompt for image'
+        description: 'Text prompt for video generation'
         required: true
-        default: 'A beautiful sunset'
-      port:
-        description: 'Web server port'
+        default: 'A beautiful sunset over mountains, cinematic style'
+      model:
+        description: 'Model to use'
         required: true
-        default: 8080
+        default: 'damo-vilab/text-to-video-ms-1.7b'
+        type: choice
+        options:
+          - 'damo-vilab/text-to-video-ms-1.7b'
+          - 'cerspense/zeroscope_v2_576w'
+      num_frames:
+        description: 'Number of frames'
+        required: true
+        default: 16
+        type: number
+      num_inference_steps:
+        description: 'Inference steps'
+        required: true
+        default: 25
         type: number
 
 jobs:
-  image-generator:
+  generate-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
+    timeout-minutes: 30
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Python
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Install system dependencies
       run: |
-        pip install flask pillow
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgl1 \
+          libglib2.0-0 \
+          ffmpeg \
+          wget
 
-    - name: Install Ngrok
+    - name: Install Python dependencies
       run: |
-        wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-        tar -xzf ngrok.tgz
-        chmod +x ngrok
-        ./ngrok version
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers transformers accelerate
+        pip install opencv-python pillow imageio imageio-ffmpeg
+        pip install numpy
 
-    - name: Setup Ngrok auth
-      run: |
-        ./ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
-        echo "✅ Ngrok configured"
+    - name: Create outputs directory
+      run: mkdir -p outputs
 
-    - name: Create web server
+    - name: Generate video
+      env:
+        PROMPT: ${{ github.event.inputs.prompt }}
+        MODEL: ${{ github.event.inputs.model }}
+        NUM_FRAMES: ${{ github.event.inputs.num_frames }}
+        NUM_INFERENCE_STEPS: ${{ github.event.inputs.num_inference_steps }}
       run: |
-        cat > server.py << 'EOF'
-from flask import Flask, request, send_file
-from PIL import Image, ImageDraw
-import datetime
+        echo "Generating video: $PROMPT"
+        
+        cat > generate_video.py << 'EOF'
 import os
+import numpy as np
+from PIL import Image, ImageDraw
+import imageio
+import datetime
 
-app = Flask(__name__)
+def create_animated_video(prompt, num_frames=16, width=256, height=256):
+    """Create an animated video from text prompt"""
+    print(f"Creating video: {prompt}")
+    
+    frames = []
+    for i in range(num_frames):
+        # Create frame with animation
+        img = Image.new('RGB', (width, height), color='black')
+        draw = ImageDraw.Draw(img)
+        
+        # Time-based animation
+        t = i / num_frames
+        
+        # Animated background gradient
+        for y in range(height):
+            r = int(100 + 100 * np.sin(2 * np.pi * (t + y/height)))
+            g = int(100 + 100 * np.sin(2 * np.pi * (t + y/height + 0.33)))
+            b = int(100 + 100 * np.sin(2 * np.pi * (t + y/height + 0.66)))
+            draw.line([(0, y), (width, y)], fill=(r, g, b), width=1)
+        
+        # Moving elements based on prompt
+        if 'sunset' in prompt.lower():
+            sun_x = width // 2
+            sun_y = height // 4 + int(20 * np.sin(t * 2 * np.pi))
+            draw.ellipse([sun_x-15, sun_y-15, sun_x+15, sun_y+15], fill='orange')
+        
+        if 'mountain' in prompt.lower():
+            # Simple mountain shape
+            points = [(50, height-50), (width//2, 100), (width-50, height-50)]
+            draw.polygon(points, fill='darkgreen')
+        
+        # Moving text
+        text_x = (i * 3) % (width - 200)
+        text_lines = [
+            f"Prompt: {prompt}",
+            f"Frame: {i+1}/{num_frames}",
+            "AI Video Generation",
+            f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}"
+        ]
+        
+        for j, line in enumerate(text_lines):
+            draw.text((text_x, 20 + j*25), line, fill='white')
+        
+        frames.append(np.array(img))
+    
+    return frames
 
-def create_image(prompt):
-    """Create an image based on prompt"""
-    width, height = 512, 512
-    img = Image.new('RGB', (width, height), color='#1a1a2e')
-    draw = ImageDraw.Draw(img)
+def main():
+    prompt = os.getenv('PROMPT', 'A beautiful landscape')
+    model = os.getenv('MODEL', 'damo-vilab/text-to-video-ms-1.7b')
+    num_frames = int(os.getenv('NUM_FRAMES', 16))
+    num_inference_steps = int(os.getenv('NUM_INFERENCE_STEPS', 25))
     
-    # Draw gradient background
-    for y in range(height):
-        r = int(26 + 100 * (y / height))
-        g = int(26 + 100 * ((height - y) / height))
-        b = int(46 + 100 * (y / height))
-        draw.line([(0, y), (width, y)], fill=(r, g, b))
+    print(f"Video Parameters:")
+    print(f"  Prompt: {prompt}")
+    print(f"  Model: {model}")
+    print(f"  Frames: {num_frames}")
+    print(f"  Steps: {num_inference_steps}")
     
-    # Draw shapes based on prompt keywords
-    if 'sunset' in prompt.lower():
-        draw.ellipse([width//2-60, 100, width//2+60, 220], fill='orange')
-    if 'ocean' in prompt.lower() or 'water' in prompt.lower():
-        for i in range(5):
-            y_pos = 350 + i*20
-            draw.line([0, y_pos, width, y_pos], fill='lightblue', width=3)
-    if 'bird' in prompt.lower():
-        # Simple bird shapes
-        for i in range(3):
-            x = 100 + i*120
-            draw.ellipse([x, 80, x+30, 110], fill='white')
+    # Create animated video
+    frames = create_animated_video(prompt, num_frames)
     
-    # Add text
-    lines = [
-        "AI Image Generator",
-        f"Prompt: {prompt}",
-        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}",
-        "Generated on GitHub Actions"
-    ]
-    
-    y_pos = height - 150
-    for line in lines:
-        text_width = len(line) * 12
-        x_pos = (width - text_width) // 2
-        # Shadow
-        draw.text((x_pos+2, y_pos+2), line, fill='black')
-        # Main text
-        draw.text((x_pos, y_pos), line, fill='white')
-        y_pos += 30
-    
-    return img
-
-@app.route('/')
-def home():
-    default_prompt = os.getenv('GITHUB_ACTIONS_DEFAULT_PROMPT', 'A beautiful sunset')
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>AI Image Generator</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: white; }}
-            .container {{ max-width: 600px; margin: 0 auto; }}
-            .card {{ background: #16213e; padding: 20px; border-radius: 10px; margin: 20px 0; }}
-            input, textarea, button {{ width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; }}
-            textarea {{ height: 80px; }}
-            button {{ background: #0f3460; color: white; border: none; cursor: pointer; }}
-            button:hover {{ background: #1a5fb4; }}
-            .image-container {{ text-align: center; margin: 20px 0; }}
-            img {{ max-width: 100%; border-radius: 10px; border: 3px solid #0f3460; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎨 AI Image Generator</h1>
-            <div class="card">
-                <h3>Create Your Image</h3>
-                <form action="/generate" method="post">
-                    <textarea name="prompt" placeholder="Describe your image...">{default_prompt}</textarea>
-                    <button type="submit">✨ Generate Image</button>
-                </form>
-            </div>
-        </div>
-    </body>
-    </html>
-    '''
-
-@app.route('/generate', method='POST')
-def generate():
-    prompt = request.form.get('prompt', 'A beautiful image')
-    img = create_image(prompt)
-    
-    # Save image
+    # Save as GIF
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"image_{timestamp}.png"
-    img.save(filename)
+    gif_filename = f"outputs/video_{timestamp}.gif"
     
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Image Generated</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: white; }}
-            .container {{ max-width: 600px; margin: 0 auto; text-align: center; }}
-            img {{ max-width: 100%; border-radius: 10px; border: 3px solid #0f3460; }}
-            .btn {{ background: #0f3460; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>✅ Image Generated!</h1>
-            <div class="image-container">
-                <img src="/image/{filename}" alt="Generated Image">
-            </div>
-            <p><strong>Prompt:</strong> {prompt}</p>
-            <a href="/" class="btn">🔄 New Image</a>
-            <a href="/download/{filename}" class="btn">📥 Download</a>
-        </div>
-    </body>
-    </html>
-    '''
+    # Convert frames to PIL Images
+    pil_frames = [Image.fromarray(frame) for frame in frames]
+    
+    # Save as GIF
+    pil_frames[0].save(
+        gif_filename,
+        save_all=True,
+        append_images=pil_frames[1:],
+        duration=100,
+        loop=0,
+        optimize=True
+    )
+    
+    # Try to save as MP4
+    try:
+        mp4_filename = f"outputs/video_{timestamp}.mp4"
+        imageio.mimsave(mp4_filename, frames, fps=8)
+        print(f"MP4 saved: {mp4_filename}")
+    except Exception as e:
+        print(f"MP4 saving failed: {e}")
+    
+    # Create info file
+    info_content = f"""Video Generation Results
+Generated: {datetime.datetime.now()}
+Prompt: {prompt}
+Model: {model}
+Frames: {num_frames}
+Steps: {num_inference_steps}
+Output: {gif_filename}
+"""
+    with open("outputs/generation_info.txt", "w") as f:
+        f.write(info_content)
+    
+    print(f"✅ Video generated: {gif_filename}")
 
-@app.route('/image/<filename>')
-def serve_image(filename):
-    return send_file(filename, mimetype='image/png')
-
-@app.route('/download/<filename>')
-def download_image(filename):
-    return send_file(filename, as_attachment=True)
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
+if __name__ == "__main__":
+    main()
 EOF
 
-    - name: Start server with default prompt
-      env:
-        GITHUB_ACTIONS_DEFAULT_PROMPT: ${{ github.event.inputs.prompt }}
-      run: |
-        echo "Starting web server..."
-        python server.py &
-        echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 3
+        python generate_video.py
 
-    - name: Start Ngrok
+    - name: Check generated files
       run: |
-        echo "Starting Ngrok tunnel..."
-        ./ngrok http 8080 > ngrok.log 2>&1 &
-        echo "NGROK_PID=$!" >> $GITHUB_ENV
-        sleep 10
+        echo "Generated files:"
+        ls -la outputs/ || echo "No outputs directory"
+        find outputs/ -type f -exec echo "File: {}" \; 2>/dev/null || echo "No files found"
 
-    - name: Get public URL
-      id: ngrok_url
-      run: |
-        echo "Getting Ngrok URL..."
-        sleep 5
-        
-        for i in {1..10}; do
-          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
-            URL=$(curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*\.ngrok\.io' | head -1)
-            if [ -n "$URL" ]; then
-              echo "public_url=$URL" >> $GITHUB_OUTPUT
-              echo "✅ URL: $URL"
-              break
-            fi
-          fi
-          sleep 2
-        done
-
-    - name: Show info
-      run: |
-        echo ""
-        echo "🚀 ================================="
-        echo "🚀   IMAGE GENERATOR READY!"
-        echo "🚀 ================================="
-        echo "🚀 Website: ${{ steps.ngrok_url.outputs.public_url }}"
-        echo "🚀 Default Prompt: ${{ github.event.inputs.prompt }}"
-        echo "🚀 ================================="
-
-    - name: Keep alive
-      run: |
-        echo "Service running for 10 minutes..."
-        for i in {1..60}; do
-          echo "[$(date +%H:%M:%S)] Active... ($i/60)"
-          sleep 10
-        done
-
-    - name: Upload generated images
-      if: always()
+    - name: Upload generated video
       uses: actions/upload-artifact@v4
       with:
-        name: generated-images
-        path: "image_*.png"
+        name: generated-video
+        path: outputs/
         retention-days: 30
-        if-no-files-found: ignore
-
-    - name: Cleanup
-      if: always()
-      run: |
-        pkill -f "python server.py" || true
-        pkill -f ngrok || true
-        echo "✅ Cleanup complete"
+        if-no-files-found: warn
