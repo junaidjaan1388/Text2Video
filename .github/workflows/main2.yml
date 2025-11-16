@@ -34,7 +34,6 @@ jobs:
 
     - name: Install Python dependencies
       run: |
-        cd web-app
         pip install -r requirements.txt
 
     - name: Install Ngrok
@@ -55,7 +54,6 @@ jobs:
 
     - name: Start Flask server
       run: |
-        cd web-app
         python app.py &
         echo "SERVER_PID=$!" >> $GITHUB_ENV
         sleep 5
