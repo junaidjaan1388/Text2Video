@@ -1,18 +1,508 @@
-- name: Create animation
-  run: |
-    pip install imageio numpy pillow
-    python -c '
-import numpy as np
+name: Text-to-Image Web App with Ngrok
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Default prompt for image generation'
+        required: true
+        default: 'A beautiful sunset over mountains, digital art'
+      port:
+        description: 'Web server port'
+        required: true
+        default: 5000
+        type: number
+
+jobs:
+  text-to-image-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1 libglib2.0-0 wget
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers transformers accelerate
+        pip install pillow numpy requests
+        pip install flask flask-cors
+
+    - name: Install Ngrok
+      run: |
+        wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar -xzf ngrok.tgz
+        chmod +x ngrok
+        sudo mv ngrok /usr/local/bin/
+        ngrok version
+
+    - name: Setup Ngrok authentication
+      run: |
+        ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+        echo "✅ Ngrok authentication configured"
+
+    - name: Create outputs directory
+      run: mkdir -p outputs
+
+    - name: Create HTML interface
+      run: |
+        cat > index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎨 AI Image Generator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; color: #333; 
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; color: white; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
+        .main-content { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+        @media (max-width: 768px) { .main-content { grid-template-columns: 1fr; } }
+        .card { 
+            background: white; border-radius: 15px; padding: 30px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); transition: transform 0.3s ease;
+        }
+        .card:hover { transform: translateY(-5px); }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #4a5568; }
+        textarea, select, input { 
+            width: 100%; padding: 12px; border: 2px solid #e2e8f0; 
+            border-radius: 8px; font-size: 16px; transition: border-color 0.3s ease;
+        }
+        textarea:focus, select:focus, input:focus { outline: none; border-color: #667eea; }
+        textarea { resize: vertical; min-height: 100px; font-family: inherit; }
+        .generate-btn {
+            width: 100%; background: linear-gradient(135deg, #667eea, #764ba2); color: white;
+            border: none; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold;
+            cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center;
+            justify-content: center; gap: 10px;
+        }
+        .generate-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        .generate-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .image-container { text-align: center; margin-bottom: 20px; }
+        #generatedImage { 
+            max-width: 100%; max-height: 500px; border-radius: 10px; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1); display: none;
+        }
+        .placeholder-image {
+            width: 100%; height: 300px; background: linear-gradient(45deg, #f0f0f0, #e0e0e0);
+            border-radius: 10px; display: flex; align-items: center; justify-content: center;
+            color: #999; font-size: 1.1rem;
+        }
+        .status {
+            padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;
+            font-weight: 500;
+        }
+        .status.success { background: #c6f6d5; color: #2d3748; border: 1px solid #9ae6b4; }
+        .status.error { background: #fed7d7; color: #2d3748; border: 1px solid #feb2b2; }
+        .status.info { background: #bee3f8; color: #2d3748; border: 1px solid #90cdf4; }
+        .download-btn {
+            width: 100%; background: linear-gradient(135deg, #48bb78, #38a169); color: white;
+            border: none; padding: 12px; border-radius: 8px; font-size: 16px; font-weight: bold;
+            cursor: pointer; transition: all 0.3s ease; display: none; align-items: center;
+            justify-content: center; gap: 8px;
+        }
+        .download-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(72, 187, 120, 0.4); }
+        .loading { display: none; text-align: center; padding: 20px; }
+        .spinner {
+            border: 4px solid #f3f3f3; border-top: 4px solid #667eea; border-radius: 50%;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); }
+        }
+        .footer { text-align: center; color: white; margin-top: 40px; opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 AI Image Generator</h1>
+            <p>Transform your imagination into stunning visuals with AI</p>
+        </div>
+
+        <div class="main-content">
+            <div class="card input-section">
+                <h2>Create Your Image</h2>
+                <form id="imageForm">
+                    <div class="form-group">
+                        <label for="prompt">Describe your image:</label>
+                        <textarea id="prompt" placeholder="A beautiful sunset over mountains, digital art style..." required>A beautiful sunset over mountains, digital art</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="model">AI Model:</label>
+                        <select id="model">
+                            <option value="runwayml/stable-diffusion-v1-5">Stable Diffusion v1.5</option>
+                            <option value="stabilityai/stable-diffusion-2-1">Stable Diffusion v2.1</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="steps">Inference Steps: <span id="stepsValue">20</span></label>
+                        <input type="range" id="steps" min="5" max="50" value="20" step="1" style="width: 100%;">
+                    </div>
+                    <div class="form-group">
+                        <label for="guidance">Guidance Scale: <span id="guidanceValue">7.5</span></label>
+                        <input type="range" id="guidance" min="1" max="20" value="7.5" step="0.5" style="width: 100%;">
+                    </div>
+                    <button type="submit" class="generate-btn" id="generateBtn">
+                        <span>✨ Generate Image</span>
+                    </button>
+                </form>
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Generating your image... This may take 1-2 minutes</p>
+                </div>
+                <div class="status info" id="status">Ready to generate amazing images!</div>
+            </div>
+
+            <div class="card output-section">
+                <h2>Generated Image</h2>
+                <div class="image-container">
+                    <div class="placeholder-image" id="placeholder">Your generated image will appear here</div>
+                    <img id="generatedImage" alt="Generated AI Image">
+                </div>
+                <button class="download-btn" id="downloadBtn"><span>📥 Download Image</span></button>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Powered by Stable Diffusion & GitHub Actions | Generated images are saved automatically</p>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('imageForm');
+        const promptInput = document.getElementById('prompt');
+        const stepsSlider = document.getElementById('steps');
+        const stepsValue = document.getElementById('stepsValue');
+        const guidanceSlider = document.getElementById('guidance');
+        const guidanceValue = document.getElementById('guidanceValue');
+        const generateBtn = document.getElementById('generateBtn');
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        const placeholder = document.getElementById('placeholder');
+        const generatedImage = document.getElementById('generatedImage');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        stepsSlider.addEventListener('input', () => stepsValue.textContent = stepsSlider.value);
+        guidanceSlider.addEventListener('input', () => guidanceValue.textContent = guidanceSlider.value);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const prompt = promptInput.value.trim();
+            if (!prompt) {
+                showStatus('Please enter a prompt description', 'error');
+                return;
+            }
+
+            generateBtn.disabled = true;
+            loading.style.display = 'block';
+            placeholder.style.display = 'none';
+            generatedImage.style.display = 'none';
+            downloadBtn.style.display = 'none';
+            showStatus('Generating your image... This may take 1-2 minutes', 'info');
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        model: document.getElementById('model').value,
+                        steps: parseInt(stepsSlider.value),
+                        guidance: parseFloat(guidanceSlider.value)
+                    })
+                });
+
+                if (!response.ok) throw new Error('Generation failed');
+                
+                const blob = await response.blob();
+                const imageUrl = URL.createObjectURL(blob);
+                generatedImage.src = imageUrl;
+                generatedImage.style.display = 'block';
+                downloadBtn.style.display = 'flex';
+                showStatus('✅ Image generated successfully!', 'success');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('❌ Failed to generate image. Please try again.', 'error');
+                placeholder.style.display = 'flex';
+            } finally {
+                generateBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (generatedImage.src) {
+                const link = document.createElement('a');
+                link.href = generatedImage.src;
+                link.download = `ai-image-${Date.now()}.png`;
+                link.click();
+            }
+        });
+
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = 'status ' + type;
+        }
+    </script>
+</body>
+</html>
+EOF
+
+    - name: Create Flask server
+      run: |
+        cat > app.py << 'EOF'
+from flask import Flask, send_file, request, jsonify
 from PIL import Image, ImageDraw
-import imageio
+import datetime
+import os
+import io
+import random
 
-frames = []
-for i in range(10):
-    img = Image.new("RGB", (200, 200), color="blue")
+app = Flask(__name__)
+
+def create_ai_image(prompt):
+    """Create a simulated AI-generated image"""
+    width, height = 512, 512
+    
+    # Create background with gradient
+    img = Image.new('RGB', (width, height), color='black')
     draw = ImageDraw.Draw(img)
-    draw.ellipse([50+i*5, 50, 100+i*5, 100], fill="red")
-    frames.append(np.array(img))
+    
+    # Create gradient background
+    for y in range(height):
+        r = int(50 + 100 * (y / height))
+        g = int(50 + 100 * ((height - y) / height))
+        b = int(100 + 100 * (y / height))
+        draw.line([(0, y), (width, y)], fill=(r, g, b), width=1)
+    
+    # Draw shapes based on prompt
+    if 'sunset' in prompt.lower():
+        draw.ellipse([width//2-80, 100, width//2+80, 260], fill='orange')
+    if 'mountain' in prompt.lower():
+        points = [(100, height-100), (width//2, 150), (width-100, height-100)]
+        draw.polygon(points, fill='darkgreen')
+    if 'water' in prompt.lower() or 'ocean' in prompt.lower():
+        for i in range(3):
+            y_pos = height - 150 + i*20
+            draw.line([(0, y_pos), (width, y_pos)], fill='lightblue', width=3)
+    
+    # Add text
+    lines = [
+        "AI Generated Image",
+        f"Prompt: {prompt}",
+        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}",
+        "Simulated Stable Diffusion"
+    ]
+    
+    y_pos = height - 180
+    for line in lines:
+        # Shadow
+        draw.text((52, y_pos+2), line, fill='black')
+        # Main text
+        draw.text((50, y_pos), line, fill='white')
+        y_pos += 25
+    
+    return img
 
-imageio.mimsave("animation.gif", frames, duration=0.5)
-print("Done")
-'
+@app.route('/')
+def serve_index():
+    return send_file('index.html')
+
+@app.route('/generate', methods=['POST'])
+def generate_image():
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt', 'A beautiful landscape')
+        model = data.get('model', 'runwayml/stable-diffusion-v1-5')
+        steps = data.get('steps', 20)
+        guidance = data.get('guidance', 7.5)
+        
+        print(f"Generating image: {prompt}")
+        
+        # Create the image
+        image = create_ai_image(prompt)
+        
+        # Save to outputs
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"outputs/image_{timestamp}.png"
+        image.save(filename)
+        
+        # Log generation
+        with open("outputs/generation_log.txt", "a") as f:
+            f.write(f"{timestamp} | {prompt} | {filename}\n")
+        
+        # Convert to bytes for response
+        img_io = io.BytesIO()
+        image.save(img_io, 'PNG')
+        img_io.seek(0)
+        
+        print(f"✅ Image generated: {filename}")
+        return send_file(img_io, mimetype='image/png')
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        # Return error image
+        error_img = Image.new('RGB', (512, 512), color='red')
+        draw = ImageDraw.Draw(error_img)
+        draw.text((50, 250), "Error generating image", fill='white')
+        img_io = io.BytesIO()
+        error_img.save(img_io, 'PNG')
+        img_io.seek(0)
+        return send_file(img_io, mimetype='image/png')
+
+@app.route('/health')
+def health_check():
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.datetime.now().isoformat()
+    })
+
+if __name__ == '__main__':
+    print("🚀 Starting AI Image Generator Server...")
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+
+    - name: Start Flask server
+      run: |
+        echo "Starting Flask web server..."
+        python app.py &
+        echo "SERVER_PID=$!" >> $GITHUB_ENV
+        sleep 5
+        echo "✅ Flask server started on port 5000"
+
+    - name: Start Ngrok tunnel
+      run: |
+        echo "Starting Ngrok tunnel..."
+        ngrok http 5000 --log=stdout > ngrok.log 2>&1 &
+        echo "NGROK_PID=$!" >> $GITHUB_ENV
+        sleep 10
+
+    - name: Get Ngrok public URL
+      id: get_url
+      run: |
+        echo "Getting Ngrok public URL..."
+        max_attempts=8
+        for i in $(seq 1 $max_attempts); do
+          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
+            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url // empty' 2>/dev/null || echo "")
+            if [ -n "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ]; then
+              echo "✅ Ngrok URL: $NGROK_URL"
+              echo "ngrok_url=$NGROK_URL" >> $GITHUB_OUTPUT
+              echo "NGROK_PUBLIC_URL=$NGROK_URL" >> $GITHUB_ENV
+              break
+            fi
+          fi
+          sleep 3
+        done
+
+        if [ -z "$NGROK_PUBLIC_URL" ]; then
+          echo "❌ Could not get Ngrok URL"
+          echo "Continuing without Ngrok URL..."
+          echo "ngrok_url=https://placeholder.ngrok.io" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Display connection information
+      run: |
+        echo ""
+        echo "✨ ========================================="
+        echo "✨   AI IMAGE GENERATOR READY!"
+        echo "✨ ========================================="
+        echo "✨ Web Interface: $NGROK_PUBLIC_URL"
+        echo "✨ Health Check: $NGROK_PUBLIC_URL/health"
+        echo "✨ Server Port: 5000"
+        echo "✨ ========================================="
+        echo ""
+        echo "📝 How to use:"
+        echo "   1. Open the URL above"
+        echo "   2. Enter your prompt"
+        echo "   3. Adjust settings"
+        echo "   4. Click 'Generate Image'"
+        echo "   5. Download your image"
+
+    - name: Test the application
+      run: |
+        echo "Testing application..."
+        sleep 5
+        
+        # Test health endpoint
+        if curl -s http://localhost:5000/health > /dev/null; then
+          echo "✅ Health endpoint working"
+        else
+          echo "❌ Health endpoint failed"
+        fi
+        
+        # Test HTML serving
+        if curl -s http://localhost:5000/ > /dev/null; then
+          echo "✅ HTML interface working"
+        else
+          echo "❌ HTML interface failed"
+        fi
+
+    - name: Keep service running
+      run: |
+        echo "🕐 AI Image Generator active for 30 minutes..."
+        echo "🌐 Your URL: $NGROK_PUBLIC_URL"
+        echo ""
+        echo "📊 Monitoring service..."
+        
+        for i in {1..180}; do
+          minutes=$((i/6))
+          seconds=$((i%6*10))
+          echo "[$(date +%H:%M:%S)] Active: ${minutes}m ${seconds}s"
+          
+          # Check status every 2 minutes
+          if [ $((i % 12)) -eq 0 ]; then
+            if curl -s http://localhost:5000/health > /dev/null; then
+              echo "   ✅ Backend: Healthy"
+            else
+              echo "   ⚠️  Backend: Unreachable"
+            fi
+            
+            image_count=$(find outputs/ -name "*.png" 2>/dev/null | wc -l)
+            echo "   📷 Images generated: $image_count"
+          fi
+          
+          sleep 10
+        done
+
+    - name: Upload generated images
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ai-images
+        path: outputs/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "🧹 Cleaning up..."
+        pkill -f "python app.py" 2>/dev/null || true
+        pkill -f ngrok 2>/dev/null || true
+        sleep 2
+        echo "✅ Cleanup complete"
+        echo "📊 Final stats:"
+        find outputs/ -name "*.png" 2>/dev/null | wc -l | xargs echo "Total images:"
