@@ -1,0 +1,519 @@
+name: Text-to-Image with Ngrok
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text prompt for image generation'
+        required: true
+        default: 'A beautiful sunset over mountains, digital art'
+      model:
+        description: 'Diffusion model to use'
+        required: true
+        default: 'runwayml/stable-diffusion-v1-5'
+        type: choice
+        options:
+          - 'runwayml/stable-diffusion-v1-5'
+          - 'stabilityai/stable-diffusion-2-1'
+          - 'CompVis/stable-diffusion-v1-4'
+      steps:
+        description: 'Number of inference steps'
+        required: true
+        default: 20
+        type: number
+      guidance:
+        description: 'Guidance scale (1-20)'
+        required: true
+        default: 7.5
+        type: number
+      port:
+        description: 'Local port for web interface'
+        required: true
+        default: 7860
+        type: number
+
+jobs:
+  text-to-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgl1 \
+          libglib2.0-0 \
+          wget \
+          ffmpeg
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers transformers accelerate
+        pip install pillow numpy requests
+        pip install gradio flask
+
+    - name: Install Ngrok
+      run: |
+        wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar -xzf ngrok.tgz
+        chmod +x ngrok
+        sudo mv ngrok /usr/local/bin/
+        ngrok version
+
+    - name: Setup Ngrok authentication
+      run: |
+        ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+        echo "✅ Ngrok authentication configured"
+
+    - name: Create outputs directory
+      run: mkdir -p outputs
+
+    - name: Create text-to-image web app
+      run: |
+        cat > app.py << 'EOF'
+import gradio as gr
+import torch
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import datetime
+import os
+import uuid
+
+# Global variables
+pipe = None
+device = "cpu"
+model_loaded = False
+
+def load_model(model_id):
+    global pipe, model_loaded
+    try:
+        print(f"Loading model: {model_id}")
+        pipe = StableDiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            use_safetensors=True
+        )
+        pipe = pipe.to(device)
+        pipe.enable_attention_slicing()  # Reduce memory usage
+        model_loaded = True
+        print(f"✅ Model {model_id} loaded successfully")
+        return f"✅ Model {model_id} loaded successfully"
+    except Exception as e:
+        error_msg = f"❌ Failed to load model: {str(e)}"
+        print(error_msg)
+        return error_msg
+
+def generate_image(prompt, model_id, steps, guidance_scale):
+    global pipe, model_loaded
+    
+    # Load model if not loaded or different model selected
+    if not model_loaded or pipe.name != model_id:
+        load_status = load_model(model_id)
+        if "❌" in load_status:
+            return None, load_status
+    
+    try:
+        print(f"Generating image: {prompt}")
+        
+        # Generate image
+        with torch.no_grad():
+            image = pipe(
+                prompt=prompt,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=torch.Generator(device=device).manual_seed(42)
+            ).images[0]
+        
+        # Save image
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"outputs/generated_image_{timestamp}_{uuid.uuid4().hex[:8]}.png"
+        image.save(filename)
+        
+        # Update generation info
+        update_generation_info(prompt, model_id, steps, guidance_scale, filename)
+        
+        success_msg = f"✅ Image generated successfully!\nSaved as: {filename}"
+        print(success_msg)
+        return image, success_msg
+        
+    except Exception as e:
+        error_msg = f"❌ Generation failed: {str(e)}"
+        print(error_msg)
+        return None, error_msg
+
+def update_generation_info(prompt, model, steps, guidance, filename):
+    info_content = f"""Image Generation Log
+Generated: {datetime.datetime.now()}
+Prompt: {prompt}
+Model: {model}
+Steps: {steps}
+Guidance Scale: {guidance}
+Output: {filename}
+"""
+    with open("outputs/generation_log.txt", "a") as f:
+        f.write(info_content + "\n" + "="*50 + "\n")
+
+def create_fallback_image(prompt):
+    """Create a fallback image when model fails"""
+    from PIL import Image, ImageDraw, ImageFont
+    import random
+    
+    width, height = 512, 512
+    img = Image.new('RGB', (width, height), color=(
+        random.randint(50, 200),
+        random.randint(50, 200), 
+        random.randint(50, 200)
+    ))
+    draw = ImageDraw.Draw(img)
+    
+    # Draw some shapes
+    draw.rectangle([50, 50, width-50, height-50], outline='white', width=3)
+    draw.ellipse([width//2-60, height//2-60, width//2+60, height//2+60], fill='yellow')
+    
+    # Add text
+    lines = [
+        "AI Image Generation",
+        f"Prompt: {prompt}",
+        "Model loading...",
+        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}"
+    ]
+    
+    for i, line in enumerate(lines):
+        draw.text((width//2-150, 150 + i*30), line, fill='white')
+    
+    return img
+
+# Create Gradio interface
+with gr.Blocks(title="Text-to-Image Generator") as demo:
+    gr.Markdown("# 🎨 Text-to-Image Diffusion Generator")
+    gr.Markdown("Generate images from text prompts using Stable Diffusion")
+    
+    with gr.Row():
+        with gr.Column():
+            prompt_input = gr.Textbox(
+                label="Prompt",
+                value="A beautiful sunset over mountains, digital art",
+                lines=3,
+                placeholder="Describe the image you want to generate..."
+            )
+            
+            model_dropdown = gr.Dropdown(
+                choices=[
+                    "runwayml/stable-diffusion-v1-5",
+                    "stabilityai/stable-diffusion-2-1", 
+                    "CompVis/stable-diffusion-v1-4"
+                ],
+                value="runwayml/stable-diffusion-v1-5",
+                label="Model"
+            )
+            
+            with gr.Row():
+                steps_slider = gr.Slider(
+                    minimum=1,
+                    maximum=50,
+                    value=20,
+                    step=1,
+                    label="Inference Steps"
+                )
+                
+                guidance_slider = gr.Slider(
+                    minimum=1.0,
+                    maximum=20.0,
+                    value=7.5,
+                    step=0.5,
+                    label="Guidance Scale"
+                )
+            
+            generate_btn = gr.Button("Generate Image", variant="primary")
+            status_output = gr.Textbox(label="Status", interactive=False)
+        
+        with gr.Column():
+            image_output = gr.Image(label="Generated Image", height=512)
+    
+    # Set up event handlers
+    generate_btn.click(
+        fn=generate_image,
+        inputs=[prompt_input, model_dropdown, steps_slider, guidance_slider],
+        outputs=[image_output, status_output]
+    )
+    
+    # Load initial model
+    gr.HTML("""
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Auto-load the default model
+        setTimeout(() => {
+            const event = new Event('change');
+            document.querySelector('.gradio-container').dispatchEvent(event);
+        }, 1000);
+    });
+    </script>
+    """)
+
+if __name__ == "__main__":
+    # Pre-load the default model
+    load_model("runwayml/stable-diffusion-v1-5")
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        quiet=True
+    )
+EOF
+
+        # Also create a simple Flask API
+        cat > api.py << 'EOF'
+from flask import Flask, request, jsonify, send_file
+import os
+from app import generate_image, load_model
+import datetime
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return '''
+    <h1>🎨 Text-to-Image API</h1>
+    <p>Use POST /generate to create images</p>
+    <p>Example:</p>
+    <pre>
+    {
+        "prompt": "a beautiful landscape",
+        "model": "runwayml/stable-diffusion-v1-5",
+        "steps": 20,
+        "guidance": 7.5
+    }
+    </pre>
+    '''
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy", "timestamp": str(datetime.datetime.now())})
+
+@app.route('/generate', methods=['POST'])
+def generate():
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt', 'a beautiful landscape')
+        model = data.get('model', 'runwayml/stable-diffusion-v1-5')
+        steps = data.get('steps', 20)
+        guidance = data.get('guidance', 7.5)
+        
+        # Generate image
+        image, message = generate_image(prompt, model, steps, guidance)
+        
+        if image:
+            # Save image temporarily
+            filename = f"outputs/api_{datetime.datetime.now().strftime('%H%M%S')}.png"
+            image.save(filename)
+            
+            return send_file(filename, mimetype='image/png')
+        else:
+            return jsonify({"error": message}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/images')
+def list_images():
+    images = [f for f in os.listdir('outputs') if f.endswith('.png')]
+    return jsonify({"images": images})
+
+if __name__ == '__main__':
+    # Pre-load model
+    load_model("runwayml/stable-diffusion-v1-5")
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+
+    - name: Start the image generation web app
+      run: |
+        echo "Starting Gradio web interface..."
+        python app.py &
+        echo "APP_PID=$!" >> $GITHUB_ENV
+        sleep 10
+
+    - name: Start Ngrok tunnel
+      run: |
+        echo "Starting Ngrok tunnel to port ${{ github.event.inputs.port }}..."
+        ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log 2>&1 &
+        echo "NGROK_PID=$!" >> $GITHUB_ENV
+        sleep 15
+
+    - name: Get Ngrok public URL
+      id: get_url
+      run: |
+        echo "Getting Ngrok public URL..."
+        max_attempts=12
+        for i in $(seq 1 $max_attempts); do
+          if curl -s http://localhost:4040/api/tunnels > /dev/null; then
+            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url // empty')
+            if [ -n "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ]; then
+              echo "✅ Ngrok URL: $NGROK_URL"
+              echo "ngrok_url=$NGROK_URL" >> $GITHUB_OUTPUT
+              echo "NGROK_PUBLIC_URL=$NGROK_URL" >> $GITHUB_ENV
+              break
+            fi
+          fi
+          echo "Attempt $i/$max_attempts failed, retrying..."
+          sleep 5
+        done
+
+        if [ -z "$NGROK_PUBLIC_URL" ]; then
+          echo "❌ Could not get Ngrok URL"
+          echo "Ngrok logs:"
+          cat ngrok.log
+          exit 1
+        fi
+
+    - name: Display connection information
+      run: |
+        echo "=========================================="
+        echo "🎨 TEXT-TO-IMAGE GENERATOR READY"
+        echo "=========================================="
+        echo "🌐 Web Interface: $NGROK_PUBLIC_URL"
+        echo "🔌 Local Port: ${{ github.event.inputs.port }}"
+        echo "🤖 API Endpoint: ${NGROK_PUBLIC_URL%/}/generate"
+        echo "📊 Health Check: ${NGROK_PUBLIC_URL%/}/health"
+        echo "=========================================="
+        echo ""
+        echo "📝 How to use:"
+        echo "1. Open the Web Interface URL above"
+        echo "2. Enter your prompt and adjust settings"
+        echo "3. Click 'Generate Image'"
+        echo "4. Images are saved in the outputs/ folder"
+        echo ""
+        echo "🔧 Current Settings:"
+        echo "   Prompt: ${{ github.event.inputs.prompt }}"
+        echo "   Model: ${{ github.event.inputs.model }}"
+        echo "   Steps: ${{ github.event.inputs.steps }}"
+        echo "   Guidance: ${{ github.event.inputs.guidance }}"
+
+    - name: Test the web interface
+      run: |
+        echo "Testing web interface..."
+        if curl -f -s "$NGROK_PUBLIC_URL" > /dev/null; then
+          echo "✅ Web interface is accessible"
+        else
+          echo "⚠️  Web interface test failed, but continuing..."
+        fi
+
+    - name: Generate sample image with provided prompt
+      env:
+        PROMPT: ${{ github.event.inputs.prompt }}
+        MODEL: ${{ github.event.inputs.model }}
+        STEPS: ${{ github.event.inputs.steps }}
+        GUIDANCE: ${{ github.event.inputs.guidance }}
+      run: |
+        echo "Generating sample image with provided parameters..."
+        cat > generate_sample.py << 'EOF'
+import os
+import torch
+from diffusers import StableDiffusionPipeline
+from PIL import Image
+import datetime
+
+def generate_sample():
+    prompt = os.getenv('PROMPT', 'A beautiful landscape')
+    model_id = os.getenv('MODEL', 'runwayml/stable-diffusion-v1-5')
+    steps = int(os.getenv('STEPS', 20))
+    guidance = float(os.getenv('GUIDANCE', 7.5))
+    
+    print(f"Generating sample image: {prompt}")
+    
+    try:
+        # Load model
+        pipe = StableDiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32
+        )
+        pipe = pipe.to("cpu")
+        pipe.enable_attention_slicing()
+        
+        # Generate image
+        image = pipe(
+            prompt=prompt,
+            num_inference_steps=steps,
+            guidance_scale=guidance
+        ).images[0]
+        
+        # Save image
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"outputs/sample_{timestamp}.png"
+        image.save(filename)
+        
+        print(f"✅ Sample image saved: {filename}")
+        return filename
+        
+    except Exception as e:
+        print(f"❌ Sample generation failed: {e}")
+        # Create fallback image
+        from PIL import Image, ImageDraw
+        img = Image.new('RGB', (512, 512), color='navy')
+        draw = ImageDraw.Draw(img)
+        draw.text((50, 200), f"Prompt: {prompt}", fill='white')
+        draw.text((50, 230), "Sample Image - Model Loading", fill='yellow')
+        filename = f"outputs/fallback_{timestamp}.png"
+        img.save(filename)
+        return filename
+
+if __name__ == "__main__":
+    generate_sample()
+EOF
+        python generate_sample.py
+
+    - name: Keep service running
+      run: |
+        echo "🕐 Text-to-Image service active for 40 minutes..."
+        echo "🌐 Your Web Interface: $NGROK_PUBLIC_URL"
+        echo "💡 Generate images by visiting the URL above"
+        echo ""
+        echo "📈 Monitoring service status..."
+        
+        for i in {1..240}; do
+          minutes=$((i/6))
+          seconds=$((i%6*10))
+          echo "[$(date +%H:%M:%S)] Service active for ${minutes}m ${seconds}s"
+          
+          # Check service status every minute
+          if [ $((i % 6)) -eq 0 ]; then
+            if curl -s "$NGROK_PUBLIC_URL" > /dev/null; then
+              echo "   ✅ Web interface: Accessible"
+            else
+              echo "   ⚠️  Web interface: Unreachable"
+            fi
+            
+            # Show recent generated images
+            recent_images=$(find outputs/ -name "*.png" -type f -mmin -5 2>/dev/null | wc -l)
+            echo "   📷 Images generated in last 5 min: $recent_images"
+          fi
+          
+          sleep 10
+        done
+
+    - name: Upload generated images
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-images
+        path: outputs/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "🧹 Cleaning up..."
+        pkill -f ngrok || true
+        pkill -f "python app.py" || true
+        pkill -f "python api.py" || true
+        echo "✅ Cleanup complete"
