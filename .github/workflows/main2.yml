@@ -1,15 +1,16 @@
-name: Simple Text-to-Image
+name: Simple Web Server
 
 on:
   workflow_dispatch:
     inputs:
-      prompt:
-        description: 'Image prompt'
+      port:
+        description: 'Server port'
         required: true
-        default: 'A beautiful sunset'
+        default: 8080
+        type: number
 
 jobs:
-  generate:
+  web-server:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -22,43 +23,43 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
-      run: pip install pillow
-
-    - name: Create simple image
-      env:
-        PROMPT: ${{ github.event.inputs.prompt }}
+    - name: Create simple server
       run: |
-        mkdir -p outputs
-        python -c "
-from PIL import Image, ImageDraw, ImageFont
-import datetime
-import os
+        cat > server.py << 'EOF'
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
 
-prompt = os.getenv('PROMPT', 'A beautiful image')
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            html = """
+            <html>
+            <body>
+                <h1>Simple Web Server</h1>
+                <p>This server is running on GitHub Actions!</p>
+                <p>Path: {}</p>
+            </body>
+            </html>
+            """.format(self.path)
+            self.wfile.write(html.encode())
+        else:
+            self.send_error(404)
 
-# Create image
-img = Image.new('RGB', (512, 512), color='navy')
-draw = ImageDraw.Draw(img)
+    def log_message(self, format, *args):
+        print(f"Server: {format % args}")
 
-# Add text
-draw.text((50, 50), 'AI Image Generator', fill='white')
-draw.text((50, 100), f'Prompt: {prompt}', fill='yellow')
-draw.text((50, 150), 'GitHub Actions', fill='lightblue')
-draw.text((50, 200), f'Time: {datetime.datetime.now()}', fill='white')
+if __name__ == '__main__':
+    port = 8080
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    print(f"Server running on port {port}")
+    server.serve_forever()
+EOF
 
-# Draw some shapes
-draw.rectangle([50, 250, 462, 350], outline='white', width=2)
-draw.ellipse([200, 260, 312, 340], fill='orange')
-
-# Save
-img.save('outputs/generated_image.png')
-print('✅ Image created: outputs/generated_image.png')
-"
-
-    - name: Upload image
-      uses: actions/upload-artifact@v4
-      with:
-        name: generated-image
-        path: outputs/
-        retention-days: 30
+    - name: Start server
+      run: |
+        python server.py &
+        echo "Server started on port 8080"
+        sleep 300
