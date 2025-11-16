@@ -1,78 +1,45 @@
-name: Simple Video Generator
+name: Cloudflared Tunnel
 
 on:
   workflow_dispatch:
     inputs:
-      prompt:
-        description: 'Video prompt'
+      port:
+        description: 'Port to expose'
         required: true
-        default: 'A sunset animation'
+        default: 8080
+        type: number
 
 jobs:
-  generate:
+  cloudflared-tunnel:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-
-    - name: Install dependencies
-      run: pip install pillow imageio
-
-    - name: Create animated video
-      env:
-        PROMPT: ${{ github.event.inputs.prompt }}
+    - name: Install Cloudflared
       run: |
-        mkdir -p outputs
-        python -c "
-import numpy as np
-from PIL import Image, ImageDraw
-import imageio
-import datetime
-import os
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+        chmod +x cloudflared-linux-amd64
+        sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
 
-prompt = os.getenv('PROMPT', 'A beautiful animation')
-frames = []
+    - name: Start test server
+      run: |
+        python -m http.server ${{ github.event.inputs.port }} &
+        echo "SERVER_PID=$!" >> $GITHUB_ENV
 
-for i in range(24):
-    img = Image.new('RGB', (400, 300), color='navy')
-    draw = ImageDraw.Draw(img)
-    
-    # Moving sun
-    sun_x = 100 + (i * 5) % 200
-    sun_y = 80
-    draw.ellipse([sun_x-15, sun_y-15, sun_x+15, sun_y+15], fill='yellow')
-    
-    # Moving text
-    text_x = (i * 3) % 250
-    draw.text((text_x, 150), f'Prompt: {prompt}', fill='white')
-    draw.text((50, 200), f'Frame {i+1}/24', fill='lightblue')
-    draw.text((50, 230), f'Time: {datetime.datetime.now().strftime(\"%H:%M:%S\")}', fill='white')
-    
-    # Waves
-    for wave in range(3):
-        wave_y = 250 + wave * 15
-        wave_offset = int(10 * np.sin(i * 0.5 + wave))
-        draw.line([(0, wave_y + wave_offset), (400, wave_y + wave_offset)], fill='lightblue', width=2)
-    
-    frames.append(np.array(img))
+    - name: Start Cloudflared tunnel
+      run: |
+        cloudflared tunnel --url http://localhost:${{ github.event.inputs.port }} > tunnel.log 2>&1 &
+        echo "TUNNEL_PID=$!" >> $GITHUB_ENV
+        sleep 10
+        
+        # Cloudflared doesn't have a simple API to get URL, but it will show in logs
+        echo "Check the workflow logs for your tunnel URL"
 
-# Save as GIF
-timestamp = datetime.datetime.now().strftime('%H%M%S')
-gif_path = f'outputs/video_{timestamp}.gif'
-imageio.mimsave(gif_path, frames, duration=0.1)
-print(f'✅ Video created: {gif_path}')
-"
-
-    - name: Upload video
-      uses: actions/upload-artifact@v4
-      with:
-        name: animated-video
-        path: outputs/
-        retention-days: 30
+    - name: Keep alive
+      run: |
+        echo "🚀 Cloudflared tunnel active for 20 minutes"
+        echo "📝 Check logs above for your public URL"
+        sleep 1200
