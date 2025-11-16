@@ -8,15 +8,6 @@ on:
         required: true
         default: 8080
         type: number
-      protocol:
-        description: 'Protocol to use'
-        required: true
-        default: 'http'
-        type: choice
-        options:
-          - 'http'
-          - 'tcp'
-          - 'tls'
 
 jobs:
   ngrok-tunnel:
@@ -27,35 +18,34 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Ngrok
-      uses: actions/ngrok@v3.0.0
+    - name: Setup Ngrok with official action
+      uses: ngrok/setup-ngrok@v1
       with:
         auth-token: ${{ secrets.NGROK_AUTH_TOKEN }}
-        config: |
-          version: "2"
-          authtoken: ${{ secrets.NGROK_AUTH_TOKEN }}
-          tunnels:
-            my-app:
-              addr: ${{ github.event.inputs.port }}
-              proto: ${{ github.event.inputs.protocol }}
-        start: false
 
     - name: Start Ngrok tunnel
       run: |
-        ngrok start --all --config ngrok.yml &
-        NGROK_PID=$!
-        echo "NGROK_PID=$NGROK_PID" >> $GITHUB_ENV
+        ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log &
+        echo "NGROK_PID=$!" >> $GITHUB_ENV
         sleep 5
 
     - name: Get Ngrok public URL
       id: ngrok_url
       run: |
-        # Get the public URL
+        # Wait for tunnel to be ready
+        sleep 5
+        
+        # Get the public URL from ngrok API
         NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+        
+        if [ "$NGROK_URL" = "null" ] || [ -z "$NGROK_URL" ]; then
+          echo "❌ Failed to get ngrok URL. Checking logs:"
+          cat ngrok.log
+          exit 1
+        fi
+        
         echo "Public URL: $NGROK_URL"
         echo "ngrok_url=$NGROK_URL" >> $GITHUB_OUTPUT
-        
-        # Also set as environment variable
         echo "NGROK_PUBLIC_URL=$NGROK_URL" >> $GITHUB_ENV
 
     - name: Display tunnel information
@@ -63,16 +53,37 @@ jobs:
         echo "🎯 Ngrok Tunnel Active"
         echo "📡 Public URL: $NGROK_PUBLIC_URL"
         echo "🔌 Local Port: ${{ github.event.inputs.port }}"
-        echo "📋 Protocol: ${{ github.event.inputs.protocol }}"
+        echo "📋 Protocol: HTTP"
         
-        # Show tunnel status
+        # Show detailed tunnel info
+        echo "📊 Tunnel Details:"
         curl -s http://localhost:4040/api/tunnels | jq '.'
+
+    - name: Start test server
+      run: |
+        # Start a simple HTTP server on the specified port
+        python -m http.server ${{ github.event.inputs.port }} &
+        echo "SERVER_PID=$!" >> $GITHUB_ENV
+        sleep 2
+
+    - name: Test the tunnel
+      run: |
+        echo "Testing tunnel connection..."
+        if curl -f "$NGROK_PUBLIC_URL" > /dev/null 2>&1; then
+          echo "✅ Tunnel is working correctly!"
+        else
+          echo "❌ Tunnel test failed"
+          echo "Debug info:"
+          curl -s http://localhost:4040/api/tunnels | jq '.'
+        fi
 
     - name: Keep tunnel alive
       run: |
         echo "🕐 Keeping tunnel active for 25 minutes..."
         for i in {1..150}; do
-          echo "⏰ Tunnel active for $(($i/6)) minutes $(($i%6*10)) seconds"
+          minutes=$((i/6))
+          seconds=$((i%6*10))
+          echo "⏰ Tunnel active for ${minutes}m ${seconds}s - URL: $NGROK_PUBLIC_URL"
           sleep 10
         done
 
@@ -80,4 +91,5 @@ jobs:
       if: always()
       run: |
         pkill ngrok || true
+        kill $SERVER_PID 2>/dev/null || true
         echo "🛑 Ngrok tunnel stopped"
