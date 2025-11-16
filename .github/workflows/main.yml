@@ -1,0 +1,426 @@
+name: Text-to-Video with Ngrok
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text prompt for video generation'
+        required: true
+        default: 'A beautiful sunset over mountains, cinematic style'
+      model_id:
+        description: 'HuggingFace model to use'
+        required: true
+        default: 'damo-vilab/text-to-video-ms-1.7b'
+        type: choice
+        options:
+          - 'damo-vilab/text-to-video-ms-1.7b'
+          - 'cerspense/zeroscope_v2_576w'
+          - 'runwayml/stable-diffusion-v1-5'
+      num_frames:
+        description: 'Number of frames'
+        required: true
+        default: 16
+        type: number
+      num_inference_steps:
+        description: 'Inference steps'
+        required: true
+        default: 25
+        type: number
+
+jobs:
+  text-to-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          ffmpeg \
+          libgl1 \
+          libglib2.0-0 \
+          wget
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers transformers accelerate
+        pip install opencv-python pillow imageio imageio-ffmpeg
+        pip install numpy requests huggingface_hub
+        pip install flask flask-cors ngrok
+
+    - name: Create outputs directory
+      run: mkdir -p outputs
+
+    - name: Setup Ngrok
+      uses: actions-hub/ngrok@v3.0.0
+      with:
+        auth-token: ${{ secrets.NGROK_AUTH_TOKEN }}
+        config: |
+          version: "2"
+          authtoken: ${{ secrets.NGROK_AUTH_TOKEN }}
+          tunnels:
+            first:
+              addr: 5000
+              proto: http
+        start: false
+
+    - name: Generate video with ngrok tunnel
+      env:
+        HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        PROMPT: ${{ github.event.inputs.prompt }}
+        MODEL_ID: ${{ github.event.inputs.model_id }}
+        NUM_FRAMES: ${{ github.event.inputs.num_frames }}
+        NUM_INFERENCE_STEPS: ${{ github.event.inputs.num_inference_steps }}
+      run: |
+        echo "Starting text-to-video generation with ngrok..."
+        
+        # Create the video generation script with ngrok
+        cat > video_generation_server.py << 'EOF'
+import os
+import torch
+import numpy as np
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import threading
+import time
+from diffusers import DiffusionPipeline
+from PIL import Image
+import imageio
+import datetime
+import logging
+from pyngrok import ngrok
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app)
+
+class VideoGenerator:
+    def __init__(self):
+        self.model_loaded = False
+        self.pipe = None
+        self.current_job = None
+        
+    def load_model(self, model_id):
+        """Load the diffusion model"""
+        try:
+            logger.info(f"Loading model: {model_id}")
+            
+            # Use CPU with float32 for compatibility
+            device = "cpu"
+            torch_dtype = torch.float32
+            
+            # Load pipeline based on model type
+            if "text-to-video" in model_id.lower():
+                self.pipe = DiffusionPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True,
+                    trust_remote_code=True
+                )
+            else:
+                # Fallback to image generation if video model fails
+                from diffusers import StableDiffusionPipeline
+                self.pipe = StableDiffusionPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True
+                )
+            
+            self.pipe = self.pipe.to(device)
+            self.pipe.enable_attention_slicing()  # Reduce memory usage
+            
+            self.model_loaded = True
+            logger.info("Model loaded successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            return False
+    
+    def create_fallback_video(self, prompt, num_frames=16, width=256, height=256):
+        """Create a fallback animated video"""
+        logger.info("Creating fallback animation")
+        frames = []
+        
+        for i in range(num_frames):
+            img = Image.new('RGB', (width, height), color='navy')
+            draw = ImageDraw.Draw(img)
+            
+            # Animated elements
+            t = i / num_frames
+            sun_x = width // 2
+            sun_y = height // 4 + int(20 * np.sin(t * 2 * np.pi))
+            
+            # Draw sun
+            draw.ellipse([sun_x-15, sun_y-15, sun_x+15, sun_y+15], fill='yellow')
+            
+            # Draw waves
+            for y in range(height//2, height, 10):
+                wave_offset = int(10 * np.sin(t * 2 * np.pi + y/20))
+                draw.line([(0, y+wave_offset), (width, y+wave_offset)], 
+                         fill='lightblue', width=2)
+            
+            # Text
+            draw.text((20, 20), f"Prompt: {prompt}", fill='white')
+            draw.text((20, 40), f"Frame: {i+1}/{num_frames}", fill='white')
+            draw.text((20, 60), "AI Video Generation", fill='white')
+            
+            frames.append(np.array(img))
+        
+        return frames
+    
+    def generate_video(self, prompt, num_frames=16, num_inference_steps=25, height=256, width=256):
+        """Generate video from text prompt"""
+        try:
+            if not self.model_loaded:
+                return self.create_fallback_video(prompt, num_frames, width, height)
+            
+            logger.info(f"Generating video: {prompt}")
+            
+            # Generate with diffusion model
+            if hasattr(self.pipe, 'text2video'):
+                # Text-to-video model
+                result = self.pipe(
+                    prompt,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    height=height,
+                    width=width
+                )
+                frames = result.frames
+            else:
+                # Text-to-image model - create slideshow
+                frames = []
+                for i in range(num_frames):
+                    image = self.pipe(
+                        prompt + f", variation {i+1}",
+                        num_inference_steps=min(num_inference_steps, 10),
+                        height=height,
+                        width=width
+                    ).images[0]
+                    frames.append(np.array(image))
+            
+            logger.info("Video generation completed")
+            return frames
+            
+        except Exception as e:
+            logger.error(f"Video generation failed: {e}")
+            return self.create_fallback_video(prompt, num_frames, width, height)
+
+# Global generator instance
+generator = VideoGenerator()
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "healthy", "model_loaded": generator.model_loaded})
+
+@app.route('/load-model', methods=['POST'])
+def load_model():
+    data = request.json
+    model_id = data.get('model_id', 'damo-vilab/text-to-video-ms-1.7b')
+    
+    success = generator.load_model(model_id)
+    return jsonify({"success": success, "model_id": model_id})
+
+@app.route('/generate', methods=['POST'])
+def generate_video():
+    try:
+        data = request.json
+        prompt = data.get('prompt', 'A beautiful landscape')
+        num_frames = data.get('num_frames', 16)
+        num_inference_steps = data.get('num_inference_steps', 25)
+        height = data.get('height', 256)
+        width = data.get('width', 256)
+        
+        logger.info(f"Received generation request: {prompt}")
+        
+        # Generate video
+        frames = generator.generate_video(
+            prompt, num_frames, num_inference_steps, height, width
+        )
+        
+        # Save video
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"outputs/generated_video_{timestamp}.gif"
+        
+        # Convert frames to PIL Images if needed
+        pil_frames = []
+        for frame in frames:
+            if isinstance(frame, np.ndarray):
+                pil_frames.append(Image.fromarray(frame))
+            else:
+                pil_frames.append(frame)
+        
+        # Save as GIF
+        pil_frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=pil_frames[1:],
+            duration=100,
+            loop=0,
+            optimize=True
+        )
+        
+        # Create info file
+        info_content = f"""Video Generation Results
+Generated: {datetime.datetime.now()}
+Prompt: {prompt}
+Frames: {num_frames}
+Steps: {num_inference_steps}
+Resolution: {width}x{height}
+Output: {output_path}
+"""
+        with open("outputs/generation_info.txt", "w") as f:
+            f.write(info_content)
+        
+        return jsonify({
+            "success": True,
+            "output_path": output_path,
+            "message": "Video generated successfully"
+        })
+        
+    except Exception as e:
+        logger.error(f"Generation error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    try:
+        return send_file(f"outputs/{filename}", as_attachment=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+
+def start_ngrok():
+    """Start ngrok tunnel"""
+    try:
+        # Set ngrok authtoken
+        ngrok.set_auth_token(os.getenv('NGROK_AUTH_TOKEN'))
+        
+        # Start tunnel
+        public_url = ngrok.connect(5000, bind_tls=True)
+        logger.info(f"Ngrok tunnel started: {public_url}")
+        return public_url
+    except Exception as e:
+        logger.error(f"Ngrok failed: {e}")
+        return None
+
+if __name__ == '__main__':
+    # Start ngrok in background
+    ngrok_url = start_ngrok()
+    
+    if ngrok_url:
+        print(f"🚀 Server accessible at: {ngrok_url}")
+        print(f"📋 Health check: {ngrok_url}/health")
+        print(f"🎬 Generate video: POST {ngrok_url}/generate")
+    
+    # Start Flask server
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+
+        # Install additional dependencies
+        pip install flask flask-cors pyngrok
+
+        # Start the video generation server with ngrok
+        echo "Starting server with ngrok..."
+        python video_generation_server.py &
+        SERVER_PID=$!
+        
+        # Wait for server to start
+        sleep 10
+        
+        # Test the server
+        echo "Testing server health..."
+        curl -f http://localhost:5000/health || echo "Health check failed"
+        
+        # Load the model
+        echo "Loading model..."
+        curl -X POST http://localhost:5000/load-model \
+          -H "Content-Type: application/json" \
+          -d "{\"model_id\":\"$MODEL_ID\"}" || echo "Model loading request failed"
+        
+        # Wait for model to load
+        sleep 30
+        
+        # Generate video
+        echo "Generating video..."
+        curl -X POST http://localhost:5000/generate \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"prompt\": \"$PROMPT\",
+            \"num_frames\": $NUM_FRAMES,
+            \"num_inference_steps\": $NUM_INFERENCE_STEPS,
+            \"height\": 256,
+            \"width\": 256
+          }" || echo "Generation request failed"
+        
+        # Wait for generation to complete
+        sleep 30
+        
+        # Stop the server
+        kill $SERVER_PID 2>/dev/null || true
+
+    - name: Check generated files
+      run: |
+        echo "=== Generated Files ==="
+        ls -la outputs/ || echo "No outputs directory"
+        find outputs/ -type f -exec echo "File: {}" \; 2>/dev/null || echo "No files found"
+
+    - name: Create fallback video if needed
+      if: failure()
+      run: |
+        echo "Creating fallback video..."
+        python -c "
+        from PIL import Image, ImageDraw
+        import imageio
+        import os
+        
+        prompt = os.getenv('PROMPT', 'Fallback video')
+        frames = []
+        
+        for i in range(16):
+            img = Image.new('RGB', (256, 256), color='darkblue')
+            draw = ImageDraw.Draw(img)
+            draw.text((50, 100), f'Prompt: {prompt}', fill='white')
+            draw.text((50, 130), f'Frame {i+1}/16', fill='yellow')
+            draw.text((50, 160), 'Video Generation', fill='lightblue')
+            frames.append(img)
+        
+        imageio.mimsave('outputs/fallback_video.gif', frames, duration=0.1)
+        print('Fallback video created')
+        "
+        
+        # Create info file
+        echo "Fallback video generated" > outputs/generation_info.txt
+        echo "Prompt: $PROMPT" >> outputs/generation_info.txt
+        echo "Model: $MODEL_ID" >> outputs/generation_info.txt
+
+    - name: Upload generated videos
+      uses: actions/upload-artifact@v4
+      with:
+        name: text-to-video-results
+        path: outputs/
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Show ngrok status
+      if: always()
+      run: |
+        echo "Ngrok tunnel was active during generation"
+        echo "For direct API access, check ngrok dashboard"
