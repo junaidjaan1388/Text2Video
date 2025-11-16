@@ -1,25 +1,20 @@
-name: Simple Text-to-Image
+name: Basic Image Generator
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Text prompt for image'
+        description: 'Image prompt'
         required: true
-        default: 'A beautiful sunset'
-      port:
-        description: 'Web server port'
-        required: true
-        default: 8080
-        type: number
+        default: 'A sunset'
 
 jobs:
-  image-generator:
+  generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
+    timeout-minutes: 10
+
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
 
     - name: Setup Python
@@ -27,248 +22,33 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install basic dependencies
+    - name: Create image
+      env:
+        PROMPT: ${{ github.event.inputs.prompt }}
       run: |
-        pip install flask pillow requests
-
-    - name: Install Ngrok
-      run: |
-        wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-        tar -xzf ngrok.tgz
-        chmod +x ngrok
-        ./ngrok version
-
-    - name: Setup Ngrok auth
-      run: |
-        ./ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
-        echo "Ngrok configured"
-
-    - name: Create simple web server
-      run: |
-        cat > server.py << 'EOF'
-from flask import Flask, request, jsonify, send_file
-from PIL import Image, ImageDraw, ImageFont
-import datetime
-import os
-import requests
-from io import BytesIO
-
-app = Flask(__name__)
-
-def create_ai_image(prompt):
-    """Create a simulated AI-generated image"""
-    width, height = 512, 512
-    
-    # Create background with gradient
-    img = Image.new('RGB', (width, height), color='black')
-    draw = ImageDraw.Draw(img)
-    
-    # Create gradient background
-    for y in range(height):
-        r = int(50 + 100 * (y / height))
-        g = int(50 + 100 * ((height - y) / height))
-        b = int(100 + 100 * (y / height))
-        draw.line([(0, y), (width, y)], fill=(r, g, b))
-    
-    # Draw some AI-style elements
-    draw.ellipse([width//2-80, height//2-80, width//2+80, height//2+80], fill='yellow', outline='orange', width=3)
-    
-    # Add text
-    text_lines = [
-        "🤖 AI GENERATED IMAGE",
-        "",
-        f"Prompt: {prompt}",
-        "",
-        "Model: Simulated Diffusion",
-        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}",
-        "",
-        "✨ This is a simulation",
-        "Real AI would generate here"
-    ]
-    
-    y_pos = height // 2 - 120
-    for line in text_lines:
-        text_width = len(line) * 10
-        x_pos = (width - text_width) // 2
-        # Shadow
-        draw.text((x_pos+2, y_pos+2), line, fill='black')
-        # Main text
-        draw.text((x_pos, y_pos), line, fill='white')
-        y_pos += 25
-    
-    return img
-
-@app.route('/')
-def home():
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>AI Image Generator</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: white; }
-            .container { max-width: 800px; margin: 0 auto; }
-            .card { background: #16213e; padding: 20px; border-radius: 10px; margin: 20px 0; }
-            input, textarea, button { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; }
-            textarea { height: 100px; }
-            button { background: #0f3460; color: white; border: none; cursor: pointer; }
-            button:hover { background: #1a5fb4; }
-            .image-container { text-align: center; margin: 20px 0; }
-            img { max-width: 100%; border-radius: 10px; border: 3px solid #0f3460; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎨 AI Image Generator</h1>
-            <div class="card">
-                <h3>Generate AI Images</h3>
-                <form action="/generate" method="post">
-                    <textarea name="prompt" placeholder="Describe the image you want to generate...">${{ github.event.inputs.prompt }}</textarea>
-                    <button type="submit">✨ Generate Image</button>
-                </form>
-            </div>
-            
-            <div class="card">
-                <h3>Example Prompts:</h3>
-                <ul>
-                    <li>"A beautiful sunset over mountains"</li>
-                    <li>"A cyberpunk city at night"</li>
-                    <li>"A cute robot in a garden"</li>
-                    <li>"A fantasy dragon flying over a castle"</li>
-                </ul>
-            </div>
-        </div>
-    </body>
-    </html>
-    '''
-
-@app.route('/generate', methods=['POST'])
-def generate_image():
-    prompt = request.form.get('prompt', 'A beautiful image')
-    
-    # Create the image
-    img = create_ai_image(prompt)
-    
-    # Save image
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"image_{timestamp}.png"
-    img.save(filename)
-    
-    # Return HTML with the image
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Generated Image</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: white; }}
-            .container {{ max-width: 800px; margin: 0 auto; text-align: center; }}
-            img {{ max-width: 100%; border-radius: 10px; border: 3px solid #0f3460; }}
-            .back-btn {{ background: #0f3460; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎨 Your Generated Image</h1>
-            <div class="image-container">
-                <img src="/image/{filename}" alt="Generated Image">
-            </div>
-            <p><strong>Prompt:</strong> {prompt}</p>
-            <p><strong>Generated:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            <a href="/" class="back-btn">🔄 Generate Another</a>
-            <a href="/download/{filename}" class="back-btn">📥 Download Image</a>
-        </div>
-    </body>
-    </html>
-    '''
-
-@app.route('/image/<filename>')
-def serve_image(filename):
-    return send_file(filename, mimetype='image/png')
-
-@app.route('/download/<filename>')
-def download_image(filename):
-    return send_file(filename, as_attachment=True, download_name=filename)
-
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy", "time": str(datetime.datetime.now())})
-
-if __name__ == '__main__':
-    # Create images directory
-    os.makedirs('images', exist_comment: true)
-    app.run(host='0.0.0.0', port=8080, debug=False)
-EOF
-
-    - name: Start web server
-      run: |
-        echo "Starting web server..."
-        python server.py &
-        echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 3
-
-    - name: Start Ngrok tunnel
-      run: |
-        echo "Starting Ngrok tunnel..."
-        ./ngrok http 8080 > ngrok.log 2>&1 &
-        echo "NGROK_PID=$!" >> $GITHUB_ENV
-        sleep 10
-
-    - name: Get public URL
-      id: ngrok_url
-      run: |
-        echo "Getting Ngrok URL..."
-        sleep 5
+        pip install pillow
+        python -c "
+        from PIL import Image, ImageDraw, ImageFont
+        import datetime
         
-        # Try multiple times to get URL
-        for i in {1..10}; do
-          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
-            URL=$(curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*\.ngrok\.io' | head -1 || echo "")
-            if [ -n "$URL" ]; then
-              echo "✅ URL found: $URL"
-              echo "public_url=$URL" >> $GITHUB_OUTPUT
-              break
-            fi
-          fi
-          sleep 2
-        done
+        # Create image
+        img = Image.new('RGB', (400, 300), color='navy')
+        draw = ImageDraw.Draw(img)
         
-        if [ -z "$URL" ]; then
-          echo "⚠️ Could not get Ngrok URL, using placeholder"
-          echo "public_url=https://placeholder.ngrok.io" >> $GITHUB_OUTPUT
-        fi
+        # Add text
+        draw.text((50, 50), 'AI Image Generator', fill='white')
+        draw.text((50, 100), f'Prompt: {\\\"$PROMPT\\\"}', fill='yellow')
+        draw.text((50, 150), 'GitHub Actions', fill='lightblue')
+        draw.text((50, 200), f'Time: {datetime.datetime.now()}', fill='white')
+        
+        # Save
+        img.save('generated_image.png')
+        print('✅ Image created: generated_image.png')
+        "
 
-    - name: Show connection info
-      run: |
-        echo ""
-        echo "🚀 ================================="
-        echo "🚀   AI IMAGE GENERATOR READY!"
-        echo "🚀 ================================="
-        echo "🚀 Website: ${{ steps.ngrok_url.outputs.public_url }}"
-        echo "🚀 Port: 8080"
-        echo "🚀 Status: ✅ Active"
-        echo "🚀 ================================="
-        echo ""
-        echo "📝 How to use:"
-        echo "   1. Open the URL above"
-        echo "   2. Enter your prompt"
-        echo "   3. Click 'Generate Image'"
-        echo "   4. View and download your image"
-        echo ""
-        echo "⏰ This service will run for 10 minutes"
-
-    - name: Keep service running
-      run: |
-        echo "Service active for 10 minutes..."
-        for i in {1..60}; do
-          echo "[$(date +%H:%M:%S)] Running... ($i/60 minutes)"
-          sleep 10
-        done
-
-    - name: Cleanup
-      if: always()
-      run: |
-        echo "Cleaning up..."
-        pkill -f "python server.py" || true
-        pkill -f ngrok || true
-        echo "Done!"
+    - name: Upload image
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-image
+        path: generated_image.png
+        retention-days: 30
