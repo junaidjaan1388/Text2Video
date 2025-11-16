@@ -7,11 +7,6 @@ on:
         description: 'Default prompt for image generation'
         required: true
         default: 'A beautiful sunset over mountains, digital art'
-      port:
-        description: 'Web server port'
-        required: true
-        default: 5000
-        type: number
 
 jobs:
   text-to-image-app:
@@ -27,13 +22,9 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y wget
-
     - name: Install Python dependencies
       run: |
+        cd web-app
         pip install -r requirements.txt
 
     - name: Install Ngrok
@@ -52,24 +43,42 @@ jobs:
     - name: Create outputs directory
       run: mkdir -p web-app/outputs
 
-    - name: Start Flask server
+    - name: Start Flask server with wait
       run: |
+        echo "Starting Flask server..."
+        cd web-app
         python app.py &
-        echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 5
-        echo "✅ Flask server started"
+        SERVER_PID=$!
+        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+        
+        # Wait for server to be ready
+        echo "Waiting for server to start..."
+        for i in {1..30}; do
+          if curl -s http://localhost:5000/health > /dev/null 2>&1; then
+            echo "✅ Flask server is ready on port 5000"
+            break
+          fi
+          if [ $i -eq 30 ]; then
+            echo "❌ Server failed to start"
+            exit 1
+          fi
+          sleep 2
+        done
 
     - name: Start Ngrok tunnel
       run: |
+        echo "Starting Ngrok tunnel..."
         ngrok http 5000 --log=stdout > ngrok.log 2>&1 &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
+        
+        # Wait for ngrok to be ready
         sleep 10
 
     - name: Get Ngrok public URL
       id: get_url
       run: |
         echo "Getting Ngrok public URL..."
-        max_attempts=8
+        max_attempts=10
         for i in $(seq 1 $max_attempts); do
           if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
             NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url // empty' 2>/dev/null || echo "")
@@ -80,12 +89,15 @@ jobs:
               break
             fi
           fi
+          echo "Attempt $i: Waiting for Ngrok..."
           sleep 3
         done
 
         if [ -z "$NGROK_PUBLIC_URL" ]; then
-          echo "⚠️ Could not get Ngrok URL"
-          echo "ngrok_url=https://placeholder.ngrok.io" >> $GITHUB_OUTPUT
+          echo "❌ Could not get Ngrok URL"
+          echo "Ngrok logs:"
+          cat ngrok.log
+          exit 1
         fi
 
     - name: Display connection information
@@ -96,29 +108,29 @@ jobs:
         echo "✨ ========================================="
         echo "✨ Web Interface: $NGROK_PUBLIC_URL"
         echo "✨ Health Check: $NGROK_PUBLIC_URL/health"
-        echo "✨ Server Port: 5000"
         echo "✨ ========================================="
-
-    - name: Test the application
-      run: |
-        echo "Testing application..."
-        sleep 3
-        
-        if curl -s http://localhost:5000/health > /dev/null; then
-          echo "✅ Health endpoint working"
-        else
-          echo "❌ Health endpoint failed"
-        fi
 
     - name: Keep service running
       run: |
         echo "🕐 AI Image Generator active for 25 minutes..."
         echo "🌐 Your URL: $NGROK_PUBLIC_URL"
+        echo ""
+        echo "📊 Monitoring service..."
         
         for i in {1..150}; do
           minutes=$((i/6))
           seconds=$((i%6*10))
           echo "[$(date +%H:%M:%S)] Active: ${minutes}m ${seconds}s"
+          
+          # Check server health every minute
+          if [ $((i % 6)) -eq 0 ]; then
+            if curl -s http://localhost:5000/health > /dev/null; then
+              echo "   ✅ Server: Healthy"
+            else
+              echo "   ❌ Server: Down"
+            fi
+          fi
+          
           sleep 10
         done
 
@@ -135,6 +147,6 @@ jobs:
       if: always()
       run: |
         echo "🧹 Cleaning up..."
-        pkill -f "python app.py" 2>/dev/null || true
+        kill $SERVER_PID 2>/dev/null || true
         pkill -f ngrok 2>/dev/null || true
         echo "✅ Cleanup complete"
