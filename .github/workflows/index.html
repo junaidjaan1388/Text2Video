@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎨 AI Image Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        .input-section h2, .output-section h2 {
+            color: #4a5568;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        textarea, select, input[type="number"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        textarea:focus, select:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: inherit;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .slider-container input[type="range"] {
+            flex: 1;
+        }
+
+        .slider-value {
+            min-width: 40px;
+            text-align: center;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .generate-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .generate-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .generate-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .image-container {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        #generatedImage {
+            max-width: 100%;
+            max-height: 500px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            display: none;
+        }
+
+        .placeholder-image {
+            width: 100%;
+            height: 300px;
+            background: linear-gradient(45deg, #f0f0f0, #e0e0e0);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            font-size: 1.1rem;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .status.success {
+            background: #c6f6d5;
+            color: #2d3748;
+            border: 1px solid #9ae6b4;
+        }
+
+        .status.error {
+            background: #fed7d7;
+            color: #2d3748;
+            border: 1px solid #feb2b2;
+        }
+
+        .status.info {
+            background: #bee3f8;
+            color: #2d3748;
+            border: 1px solid #90cdf4;
+        }
+
+        .download-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .download-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 5px 15px rgba(72, 187, 120, 0.4);
+        }
+
+        .examples {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .examples h2 {
+            color: #4a5568;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .example-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .example-card {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .example-card:hover {
+            background: #edf2f7;
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+
+        .example-text {
+            font-size: 14px;
+            color: #4a5568;
+            line-height: 1.4;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 AI Image Generator</h1>
+            <p>Transform your imagination into stunning visuals with AI</p>
+        </div>
+
+        <div class="main-content">
+            <div class="card input-section">
+                <h2>Create Your Image</h2>
+                <form id="imageForm">
+                    <div class="form-group">
+                        <label for="prompt">Describe your image:</label>
+                        <textarea 
+                            id="prompt" 
+                            placeholder="A beautiful sunset over mountains, digital art style, vibrant colors..."
+                            required
+                        ></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="model">AI Model:</label>
+                        <select id="model">
+                            <option value="runwayml/stable-diffusion-v1-5">Stable Diffusion v1.5</option>
+                            <option value="stabilityai/stable-diffusion-2-1">Stable Diffusion v2.1</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="steps">Inference Steps: <span id="stepsValue">20</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="steps" min="5" max="50" value="20" step="1">
+                            <span class="slider-value" id="stepsDisplay">20</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="guidance">Guidance Scale: <span id="guidanceValue">7.5</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="guidance" min="1" max="20" value="7.5" step="0.5">
+                            <span class="slider-value" id="guidanceDisplay">7.5</span>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="generate-btn" id="generateBtn">
+                        <span>✨ Generate Image</span>
+                    </button>
+                </form>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Generating your image... This may take 1-2 minutes</p>
+                </div>
+
+                <div class="status info" id="status">
+                    Ready to generate amazing images!
+                </div>
+            </div>
+
+            <div class="card output-section">
+                <h2>Generated Image</h2>
+                <div class="image-container">
+                    <div class="placeholder-image" id="placeholder">
+                        Your generated image will appear here
+                    </div>
+                    <img id="generatedImage" alt="Generated AI Image">
+                </div>
+                <button class="download-btn" id="downloadBtn">
+                    <span>📥 Download Image</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="examples">
+            <h2>Example Prompts</h2>
+            <div class="example-grid">
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">A serene lake surrounded by pine trees, misty morning, digital painting style</div>
+                </div>
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">A cyberpunk cityscape at night with neon lights, futuristic architecture</div>
+                </div>
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">A cute cartoon robot playing guitar in a garden, colorful animated style</div>
+                </div>
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">A majestic dragon flying over medieval castle, fantasy art, epic lighting</div>
+                </div>
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">A bowl of fresh fruit on a wooden table, photorealistic, studio lighting</div>
+                </div>
+                <div class="example-card" onclick="setExample(this)">
+                    <div class="example-text">An astronaut floating in space with Earth in background, cosmic, detailed</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Powered by Stable Diffusion & GitHub Actions | Generated images are saved automatically</p>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const form = document.getElementById('imageForm');
+        const promptInput = document.getElementById('prompt');
+        const modelSelect = document.getElementById('model');
+        const stepsSlider = document.getElementById('steps');
+        const stepsDisplay = document.getElementById('stepsDisplay');
+        const guidanceSlider = document.getElementById('guidance');
+        const guidanceDisplay = document.getElementById('guidanceDisplay');
+        const generateBtn = document.getElementById('generateBtn');
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        const placeholder = document.getElementById('placeholder');
+        const generatedImage = document.getElementById('generatedImage');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // Update slider values
+        stepsSlider.addEventListener('input', () => {
+            stepsDisplay.textContent = stepsSlider.value;
+        });
+
+        guidanceSlider.addEventListener('input', () => {
+            guidanceDisplay.textContent = guidanceSlider.value;
+        });
+
+        // Example prompts
+        function setExample(card) {
+            const text = card.querySelector('.example-text').textContent;
+            promptInput.value = text;
+            promptInput.focus();
+        }
+
+        // Form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const prompt = promptInput.value.trim();
+            if (!prompt) {
+                showStatus('Please enter a prompt description', 'error');
+                return;
+            }
+
+            // Show loading state
+            generateBtn.disabled = true;
+            loading.style.display = 'block';
+            placeholder.style.display = 'none';
+            generatedImage.style.display = 'none';
+            downloadBtn.style.display = 'none';
+            showStatus('Generating your image... This may take 1-2 minutes', 'info');
+
+            try {
+                // In a real implementation, this would call your backend API
+                // For now, we'll simulate the process and show a placeholder
+                
+                // Simulate API call delay
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                // In a real implementation, you would:
+                // const response = await fetch('/generate', {
+                //     method: 'POST',
+                //     headers: { 'Content-Type': 'application/json' },
+                //     body: JSON.stringify({
+                //         prompt: prompt,
+                //         model: modelSelect.value,
+                //         steps: parseInt(stepsSlider.value),
+                //         guidance: parseFloat(guidanceSlider.value)
+                //     })
+                // });
+                // 
+                // const data = await response.json();
+                // if (data.success) {
+                //     generatedImage.src = data.image_url;
+                //     showStatus('Image generated successfully!', 'success');
+                // } else {
+                //     throw new Error(data.error);
+                // }
+
+                // For demo purposes - show a placeholder
+                generatedImage.src = `https://picsum.photos/512/512?random=${Date.now()}`;
+                generatedImage.style.display = 'block';
+                downloadBtn.style.display = 'flex';
+                showStatus('✅ Image generated successfully! You can now download it.', 'success');
+                
+            } catch (error) {
+                console.error('Generation error:', error);
+                showStatus('❌ Failed to generate image. Please try again.', 'error');
+                placeholder.style.display = 'flex';
+            } finally {
+                generateBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+
+        // Download functionality
+        downloadBtn.addEventListener('click', () => {
+            if (generatedImage.src) {
+                const link = document.createElement('a');
+                link.href = generatedImage.src;
+                link.download = `ai-generated-image-${Date.now()}.png`;
+                link.click();
+            }
+        });
+
+        // Status display function
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = 'status ' + type;
+        }
+
+        // Initialize with a sample prompt
+        promptInput.value = "A beautiful sunset over mountains, digital art style, vibrant colors";
+    </script>
+</body>
+</html>
