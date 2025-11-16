@@ -1,171 +1,116 @@
-name: Manual Ngrok Setup
+name: Webhook Testing
 
 on:
   workflow_dispatch:
-    inputs:
-      port:
-        description: 'Local port to expose'
-        required: true
-        default: 3000
-        type: number
 
 jobs:
-  manual-ngrok:
+  webhook-tester:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install Ngrok manually
-      run: |
-        # Download and install ngrok
-        wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-        tar -xzf ngrok-v3-stable-linux-amd64.tgz
-        sudo mv ngrok /usr/local/bin/
-        ngrok --version
+    - name: Setup Ngrok
+      uses: ngrok/setup-ngrok@v1
+      with:
+        auth-token: ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    - name: Configure Ngrok auth
+    - name: Create webhook receiver
       run: |
-        ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-        echo "✅ Ngrok authenticated"
-
-    - name: Create Python test server
-      run: |
-        cat > server.py << 'EOF'
-from http.server import HTTPServer, BaseHTTPRequestHandler
+        cat > webhook_server.py << 'EOF'
+from flask import Flask, request, jsonify
 import json
-import datetime
+from datetime import datetime
 
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        
-        response = f"""
-        <html>
-            <body>
-                <h1>🚀 Server via Ngrok</h1>
-                <p>Time: {datetime.datetime.now()}</p>
-                <p>Path: {self.path}</p>
-                <p>This server is exposed via Ngrok from GitHub Actions</p>
-                <h3>Endpoints:</h3>
-                <ul>
-                    <li><a href="/health">/health</a></li>
-                    <li><a href="/json">/json</a></li>
-                </ul>
-            </body>
-        </html>
-        """
-        self.wfile.write(response.encode())
+app = Flask(__name__)
+webhooks = []
+
+@app.route('/webhook', methods=['POST', 'GET'])
+def webhook():
+    if request.method == 'GET':
+        return jsonify({
+            "total_webhooks": len(webhooks),
+            "webhooks": webhooks
+        })
     
-    def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        
-        response = {
-            "status": "received",
-            "data": post_data.decode(),
-            "timestamp": str(datetime.datetime.now())
-        }
-        self.wfile.write(json.dumps(response).encode())
+    # Handle POST request
+    data = request.get_json(silent=True) or request.data.decode()
+    headers = dict(request.headers)
+    
+    webhook_data = {
+        "id": len(webhooks) + 1,
+        "timestamp": datetime.now().isoformat(),
+        "method": request.method,
+        "headers": headers,
+        "data": data,
+        "remote_addr": request.remote_addr
+    }
+    
+    webhooks.append(webhook_data)
+    
+    print(f"📨 Webhook #{len(webhooks)} received")
+    
+    return jsonify({"status": "success", "id": len(webhooks)})
+
+@app.route('/')
+def home():
+    return '''
+    <h1>Webhook Testing Server</h1>
+    <p>Send webhooks to: <code>/webhook</code></p>
+    <p>View received webhooks: <code>/webhook</code> (GET)</p>
+    <p>Total received: ''' + str(len(webhooks)) + '''</p>
+    '''
 
 if __name__ == '__main__':
-    port = 3000
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    print(f"Starting server on port {port}...")
-    server.serve_forever()
+    app.run(host='0.0.0.0', port=5000)
 EOF
 
-    - name: Start server in background
-      run: |
-        python server.py &
-        echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 3
+        pip install flask
 
-    - name: Start Ngrok tunnel
+    - name: Start server and tunnel
       run: |
-        ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log &
+        # Start webhook server
+        python webhook_server.py &
+        echo "SERVER_PID=$!" >> $GITHUB_ENV
+        
+        # Start ngrok tunnel
+        ngrok http 5000 &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
+        
         sleep 10
 
-    - name: Get tunnel URL
-      id: tunnel
+    - name: Get webhook URL
+      id: get_url
       run: |
-        # Get tunnel URL from ngrok API
-        max_retries=10
+        max_retries=5
         for i in $(seq 1 $max_retries); do
-          echo "Attempt $i to get tunnel URL..."
-          TUNNEL_RESPONSE=$(curl -s http://localhost:4040/api/tunnels || true)
-          TUNNEL_URL=$(echo "$TUNNEL_RESPONSE" | jq -r '.tunnels[0].public_url // empty')
-          
-          if [ -n "$TUNNEL_URL" ] && [ "$TUNNEL_URL" != "null" ]; then
-            echo "✅ Tunnel URL obtained: $TUNNEL_URL"
-            echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
-            echo "NGROK_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          if [ "$URL" != "null" ] && [ -n "$URL" ]; then
+            echo "webhook_url=$URL/webhook" >> $GITHUB_OUTPUT
+            echo "WEBHOOK_URL=$URL/webhook" >> $GITHUB_ENV
+            echo "✅ Webhook URL: $URL/webhook"
             break
           fi
-          
-          if [ $i -eq $max_retries ]; then
-            echo "❌ Failed to get tunnel URL after $max_retries attempts"
-            echo "Ngrok log:"
-            cat ngrok.log
-            exit 1
-          fi
-          
           sleep 5
         done
 
-    - name: Display connection info
+    - name: Display webhook information
       run: |
-        echo "=========================================="
-        echo "🌐 YOUR NGROK TUNNEL IS ACTIVE"
-        echo "=========================================="
-        echo "Public URL: $NGROK_URL"
-        echo "Local port: ${{ github.event.inputs.port }}"
-        echo "Test URL: $NGROK_URL/health"
-        echo "=========================================="
-        
-        # Show tunnel details
-        echo "Tunnel details:"
-        curl -s http://localhost:4040/api/tunnels | jq '.'
+        echo "🎯 WEBHOOK TESTING SERVER"
+        echo "================================"
+        echo "Webhook URL: $WEBHOOK_URL"
+        echo "View received: $WEBHOOK_URL (GET)"
+        echo "Test with: curl -X POST $WEBHOOK_URL -d '{\"test\":\"data\"}'"
+        echo "================================"
 
-    - name: Test endpoints
+    - name: Keep alive
       run: |
-        echo "Testing endpoints via ngrok..."
+        echo "⏰ Webhook server active for 20 minutes..."
+        echo "📨 Send webhooks to: $WEBHOOK_URL"
         
-        # Test GET request
-        echo "GET $NGROK_URL/health"
-        curl -s "$NGROK_URL/health" | head -5
-        
-        # Test POST request
-        echo -e "\nPOST $NGROK_URL"
-        curl -s -X POST "$NGROK_URL" \
-          -H "Content-Type: application/json" \
-          -d '{"test": "data"}' | jq '.'
-
-    - name: Monitor tunnel
-      run: |
-        echo "📡 Tunnel monitoring active for 20 minutes..."
-        echo "🔗 Your URL: $NGROK_URL"
-        echo "⏰ This workflow will timeout after 20 minutes of inactivity"
-        
-        # Simple keep-alive
         for i in {1..120}; do
-          echo "[$(date +%H:%M:%S)] Tunnel active - $NGROK_URL"
+          echo "[$(date +%H:%M:%S)] Waiting for webhooks... ($i/120)"
           sleep 10
         done
-
-    - name: Cleanup
-      if: always()
-      run: |
-        echo "🧹 Cleaning up processes..."
-        pkill ngrok || true
-        kill $SERVER_PID 2>/dev/null || true
-        echo "✅ Cleanup complete"
