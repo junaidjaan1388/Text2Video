@@ -86,10 +86,7 @@ from diffusers import StableDiffusionPipeline
 from PIL import Image
 import datetime
 import os
-import requests
-from io import BytesIO
 
-# Global variables
 pipe = None
 model_loaded = False
 current_model = ""
@@ -118,29 +115,21 @@ def load_model(model_id):
         return error_msg
 
 def create_fallback_image(prompt):
-    """Create a fallback image when model fails"""
     from PIL import Image, ImageDraw
     import random
     
     width, height = 512, 512
-    # Random color background
     color = (random.randint(50, 200), random.randint(50, 200), random.randint(50, 200))
     img = Image.new('RGB', (width, height), color=color)
     draw = ImageDraw.Draw(img)
     
-    # Draw border
     draw.rectangle([10, 10, width-10, height-10], outline='white', width=3)
-    
-    # Draw shapes
     draw.ellipse([width//2-60, height//2-60, width//2+60, height//2+60], fill='yellow')
-    draw.rectangle([width//4, height//4, width//4+80, height//4+80], fill='lightblue')
     
-    # Add text
     lines = [
         "🎨 AI Image Generator",
         f"Prompt: {prompt}",
         "Model Loading...",
-        "Please wait or try again",
         f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}"
     ]
     
@@ -156,7 +145,6 @@ def create_fallback_image(prompt):
 def generate_image(prompt, model_id, steps, guidance_scale):
     global pipe, model_loaded
     
-    # Load model if needed
     if not model_loaded:
         load_status = load_model(model_id)
         if "❌" in load_status:
@@ -165,7 +153,6 @@ def generate_image(prompt, model_id, steps, guidance_scale):
     try:
         print(f"Generating image: {prompt}")
         
-        # Generate image
         with torch.no_grad():
             image = pipe(
                 prompt=prompt,
@@ -174,12 +161,10 @@ def generate_image(prompt, model_id, steps, guidance_scale):
                 generator=torch.Generator(device="cpu").manual_seed(42)
             ).images[0]
         
-        # Save image
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"outputs/generated_image_{timestamp}.png"
         image.save(filename)
         
-        # Update generation info
         info_content = f"""Image Generation
 Time: {datetime.datetime.now()}
 Prompt: {prompt}
@@ -200,18 +185,14 @@ File: {filename}
         print(error_msg)
         return create_fallback_image(prompt), error_msg
 
-# Create Gradio interface
 with gr.Blocks(theme=gr.themes.Soft(), title="Text-to-Image Generator") as demo:
-    gr.Markdown("""
-    # 🎨 Text-to-Image AI Generator
-    *Generate images from text using Stable Diffusion*
-    """)
+    gr.Markdown("# 🎨 Text-to-Image AI Generator")
     
     with gr.Row():
         with gr.Column():
             prompt_input = gr.Textbox(
                 label="Prompt",
-                value="${{ github.event.inputs.prompt }}",
+                value="A beautiful sunset over mountains, digital art",
                 lines=3,
                 placeholder="Describe the image you want to generate..."
             )
@@ -252,19 +233,16 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Text-to-Image Generator") as demo:
                 show_download_button=True
             )
     
-    # Examples
     gr.Examples(
         examples=[
             ["A beautiful sunset over mountains, digital art"],
             ["A cyberpunk cityscape at night with neon lights"],
             ["A cute cartoon robot in a garden, colorful"],
-            ["A majestic dragon flying over a medieval castle"],
-            ["A bowl of fresh fruit on a wooden table, photorealistic"]
+            ["A majestic dragon flying over a medieval castle"]
         ],
         inputs=prompt_input
     )
     
-    # Event handler
     generate_btn.click(
         fn=generate_image,
         inputs=[prompt_input, model_dropdown, steps_slider, guidance_slider],
@@ -272,7 +250,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Text-to-Image Generator") as demo:
     )
 
 if __name__ == "__main__":
-    # Pre-load the default model
     print("🚀 Starting Text-to-Image Generator...")
     load_model("runwayml/stable-diffusion-v1-5")
     demo.launch(
@@ -297,7 +274,6 @@ EOF
         ngrok http 7860 --log=stdout > ngrok.log 2>&1 &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
         sleep 15
-        echo "✅ Ngrok tunnel starting..."
 
     - name: Get Ngrok public URL
       id: get_url
@@ -347,16 +323,12 @@ EOF
         echo "   4. Click 'Generate Image'"
         echo "   5. Wait 1-2 minutes for generation"
         echo "   6. Download your image"
-        echo ""
-        echo "💡 Images are automatically saved in outputs/ folder"
 
     - name: Test the web interface
       run: |
         echo "Testing web interface..."
         if curl -f -s "$NGROK_PUBLIC_URL" > /dev/null; then
           echo "✅ Web interface is accessible"
-          echo "Quick health check:"
-          curl -s "$NGROK_PUBLIC_URL" | head -2
         else
           echo "⚠️  Web interface test failed, but continuing..."
         fi
@@ -385,7 +357,6 @@ def generate_sample():
     print(f"Generating sample: {prompt}")
     
     try:
-        # Load model
         pipe = StableDiffusionPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.float32
@@ -393,14 +364,12 @@ def generate_sample():
         pipe = pipe.to("cpu")
         pipe.enable_attention_slicing()
         
-        # Generate
         image = pipe(
             prompt=prompt,
             num_inference_steps=steps,
             guidance_scale=guidance
         ).images[0]
         
-        # Save
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"outputs/sample_{timestamp}.png"
         image.save(filename)
@@ -408,7 +377,6 @@ def generate_sample():
         
     except Exception as e:
         print(f"❌ Sample generation failed: {e}")
-        # Create fallback
         from PIL import Image, ImageDraw
         img = Image.new('RGB', (512, 512), color='darkblue')
         draw = ImageDraw.Draw(img)
@@ -424,17 +392,16 @@ EOF
 
     - name: Keep service running with monitoring
       run: |
-        echo "🕐 Text-to-Image service active for 40 minutes..."
+        echo "🕐 Text-to-Image service active for 30 minutes..."
         echo "🌐 Your Web Interface: $NGROK_PUBLIC_URL"
         echo ""
         echo "📈 Monitoring service status..."
         
-        for i in {1..240}; do
+        for i in {1..180}; do
           minutes=$((i/6))
           seconds=$((i%6*10))
           echo "[$(date +%H:%M:%S)] Service active for ${minutes}m ${seconds}s"
           
-          # Check service status every 2 minutes
           if [ $((i % 12)) -eq 0 ]; then
             if curl -s "$NGROK_PUBLIC_URL" > /dev/null; then
               echo "   ✅ Web interface: Accessible"
@@ -442,7 +409,6 @@ EOF
               echo "   ⚠️  Web interface: Unreachable"
             fi
             
-            # Show image count
             image_count=$(find outputs/ -name "*.png" 2>/dev/null | wc -l)
             echo "   📷 Total images generated: $image_count"
           fi
@@ -467,8 +433,5 @@ EOF
         pkill -f ngrok 2>/dev/null || true
         sleep 3
         echo "✅ Cleanup complete"
-        
-        # Show final stats
         echo "📊 Final statistics:"
         find outputs/ -name "*.png" 2>/dev/null | wc -l | xargs echo "Total images:"
-        ls -la outputs/ 2>/dev/null || echo "No outputs directory"
