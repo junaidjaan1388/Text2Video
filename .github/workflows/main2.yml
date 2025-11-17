@@ -1,11 +1,20 @@
-name: Debug AI Generator
+name: Free Image to Video Generation
 
 on:
-  workflow_dispatch
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: 'URL of input image'
+        required: true
+      prompt:
+        description: 'Video description'
+        required: false
+        default: 'Animated version of the input image'
 
 jobs:
-  debug:
-    runs-on: ubuntu-latest
+  generate-video:
+    runs-on: ubuntu-latest-16core
+    timeout-minutes: 45
     
     steps:
     - name: Checkout
@@ -16,37 +25,63 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install minimal dependencies
+    - name: Install dependencies
       run: |
-        pip install flask
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers accelerate transformers opencv-python pillow requests
 
-    - name: Create simple test server
+    - name: Download and process image
       run: |
-        mkdir -p web-app
-        cat > web-app/app.py << 'EOF'
-from flask import Flask, jsonify
-app = Flask(__name__)
+        mkdir -p inputs outputs
+        # Download image from URL
+        wget "${{ github.event.inputs.image_url }}" -O inputs/input_image.jpg
+        echo "✅ Image downloaded"
 
-@app.route('/')
-def home():
-    return "🚀 AI Image Generator - Server is running!"
+    - name: Create video generation script
+      run: |
+        cat > generate_video.py << 'EOF'
+import torch
+from diffusers import StableVideoDiffusionPipeline
+from diffusers.utils import load_image, export_to_video
+import PIL.Image
+import os
 
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+# Load pipeline
+pipe = StableVideoDiffusionPipeline.from_pretrained(
+    "stabilityai/stable-video-diffusion-img2vid-xt",
+    torch_dtype=torch.float16,
+    variant="fp16"
+)
+pipe.enable_model_cpu_offload()
 
-@app.route('/test')
-def test():
-    return jsonify({"message": "Test successful!"})
+# Load and process image
+image = load_image("inputs/input_image.jpg")
+image = image.resize((1024, 576))
 
-if __name__ == '__main__':
-    print("Starting server...")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+# Generate video
+generator = torch.manual_seed(42)
+frames = pipe(
+    image,
+    decode_chunk_size=8,
+    generator=generator,
+    motion_bucket_id=180,
+    noise_aug_strength=0.1,
+    num_frames=25,
+).frames[0]
+
+# Export video
+export_to_video(frames, "outputs/generated_video.mp4", fps=7)
+print("✅ Video generated successfully!")
 EOF
 
-    - name: Start server
+    - name: Generate video
       run: |
-        cd web-app
-        python app.py &
-        sleep 3
-        curl http://localhost:5000/health || echo "Server failed to start"
+        echo "🎬 Generating video (this may take 10-15 minutes)..."
+        python generate_video.py
+
+    - name: Upload generated video
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-video
+        path: outputs/
+        retention-days: 7
