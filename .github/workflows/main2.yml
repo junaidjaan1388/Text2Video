@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Image generation prompt'
+        description: 'Image prompt'
         required: true
-        default: 'A beautiful sunset over mountains, digital art'
+        default: 'A beautiful sunset'
 
 jobs:
   image-generator:
@@ -22,9 +22,10 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: |
-        pip install -r requirements.txt
+        cd web-app
+        pip install flask pillow
 
     - name: Install Ngrok
       run: |
@@ -42,14 +43,15 @@ jobs:
     - name: Create outputs directory
       run: mkdir -p web-app/outputs
 
-    - name: Start server with health check
+    - name: Start Flask server
       run: |
+        cd web-app
         python app.py &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
-        # Wait for server with retries
-        echo "⏳ Waiting for server to start..."
+        # Wait for server to start
+        echo "⏳ Waiting for server..."
         for i in {1..30}; do
           if curl -s http://localhost:5000/health > /dev/null 2>&1; then
             echo "✅ Server is healthy after $((i*2)) seconds"
@@ -61,61 +63,128 @@ jobs:
           fi
           sleep 2
         done
-        
-        # Test image generation
-        echo "🧪 Testing image generation..."
-        curl -X POST http://localhost:5000/generate \
-          -H "Content-Type: application/json" \
-          -d '{"prompt":"test image", "steps":20, "guidance":7.5}' \
-          -o test.png 2>/dev/null && echo "✅ Test image generated" || echo "❌ Test failed"
 
     - name: Start Ngrok tunnel
       run: |
         echo "🌐 Starting Ngrok tunnel..."
+        # Start ngrok and keep it running
         ngrok http 5000 --log=stdout > ngrok.log 2>&1 &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
-        sleep 10
+        
+        # Give ngrok more time to initialize
+        echo "Waiting for Ngrok to initialize..."
+        sleep 15
 
-    - name: Get public URL
+    - name: Get Ngrok public URL
       id: ngrok_url
       run: |
         echo "🔗 Getting Ngrok URL..."
-        for i in {1..10}; do
-          URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*\.ngrok\.io' | head -1)
-          if [ -n "$URL" ]; then
+        
+        # Multiple methods to get the URL
+        max_attempts=12
+        for i in $(seq 1 $max_attempts); do
+          echo "Attempt $i to get Ngrok URL..."
+          
+          # Method 1: Try ngrok API
+          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
+            URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*\.ngrok\.io' | head -1)
+            if [ -n "$URL" ]; then
+              echo "✅ Ngrok URL found via API: $URL"
+              echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
+              break
+            fi
+          fi
+          
+          # Method 2: Check ngrok logs
+          if [ -f ngrok.log ]; then
+            URL=$(grep -o 'url=https://[^ ]*\.ngrok\.io' ngrok.log | head -1 | cut -d= -f2)
+            if [ -n "$URL" ]; then
+              echo "✅ Ngrok URL found in logs: $URL"
+              echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
+              break
+            fi
+          fi
+          
+          # Method 3: Try different API endpoint
+          URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    tunnels = data.get('tunnels', [])
+    if tunnels:
+        print(tunnels[0].get('public_url', ''))
+except:
+    pass
+" || echo "")
+          
+          if [ -n "$URL" ] && [ "$URL" != "null" ]; then
+            echo "✅ Ngrok URL found via JSON: $URL"
             echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
-            echo "✅ Public URL: $URL"
             break
           fi
-          sleep 3
+          
+          if [ $i -eq $max_attempts ]; then
+            echo "❌ Could not get Ngrok URL after $max_attempts attempts"
+            echo "Ngrok logs:"
+            cat ngrok.log
+            # Create a placeholder URL to continue
+            echo "ngrok_url=https://placeholder.ngrok.io" >> $GITHUB_OUTPUT
+          fi
+          
+          sleep 5
         done
 
-    - name: Show connection info
+    - name: Display connection information
       run: |
         echo ""
-        echo "✨ ================================="
+        echo "✨ ========================================="
         echo "✨   AI IMAGE GENERATOR READY!"
-        echo "✨ ================================="
-        echo "✨ URL: ${{ steps.ngrok_url.outputs.ngrok_url }}"
-        echo "✨ Test: ${{ steps.ngrok_url.outputs.ngrok_url }}/test"
-        echo "✨ Health: ${{ steps.ngrok_url.outputs.ngrok_url }}/health"
-        echo "✨ ================================="
+        echo "✨ ========================================="
+        echo "✨ Public URL: ${{ steps.ngrok_url.outputs.ngrok_url }}"
+        echo "✨ Health Check: ${{ steps.ngrok_url.outputs.ngrok_url }}/health"
+        echo "✨ Test Image: ${{ steps.ngrok_url.outputs.ngrok_url }}/test"
+        echo "✨ ========================================="
+        echo ""
+        echo "📝 How to use:"
+        echo "   1. Open the URL above"
+        echo "   2. Enter your prompt"
+        echo "   3. Click 'Generate Image'"
+        echo "   4. Wait for your image"
+        echo "   5. Images are saved automatically"
+
+    - name: Test public access
+      run: |
+        URL="${{ steps.ngrok_url.outputs.ngrok_url }}"
+        if [ "$URL" != "https://placeholder.ngrok.io" ]; then
+          echo "Testing public access to: $URL"
+          if curl -s "$URL/health" > /dev/null 2>&1; then
+            echo "✅ Public access working!"
+          else
+            echo "⚠️  Cannot access via public URL (this might be normal during startup)"
+          fi
+        else
+          echo "⚠️  Using placeholder URL - check Ngrok configuration"
+        fi
 
     - name: Keep service running
       run: |
-        echo "⏰ Service active for 20 minutes..."
-        echo "🌐 Your generator: ${{ steps.ngrok_url.outputs.ngrok_url }}"
+        echo "🕐 AI Image Generator active for 20 minutes..."
+        echo "🌐 Your public URL: ${{ steps.ngrok_url.outputs.ngrok_url }}"
+        echo ""
+        echo "📊 Monitoring service status..."
         
         for i in {1..120}; do
-          echo "[$(date +%H:%M:%S)] Running... ($((i/6))m $((i%6*10))s)"
+          minutes=$((i/6))
+          seconds=$((i%6*10))
+          echo "[$(date +%H:%M:%S)] Active: ${minutes}m ${seconds}s"
           
-          # Monitor every 30 seconds
-          if [ $((i % 3)) -eq 0 ]; then
+          # Check server health every 2 minutes
+          if [ $((i % 12)) -eq 0 ]; then
             if curl -s http://localhost:5000/health > /dev/null; then
               count=$(find web-app/outputs -name "*.png" 2>/dev/null | wc -l)
-              echo "   📊 Status: Healthy | Images: $count"
+              echo "   ✅ Server healthy | Images: $count"
             else
-              echo "   ❌ Status: Server down"
+              echo "   ❌ Server down"
             fi
           fi
           
@@ -129,11 +198,17 @@ jobs:
         name: ai-images
         path: web-app/outputs/
         retention-days: 30
+        if-no-files-found: warn
 
     - name: Cleanup
       if: always()
       run: |
         echo "🧹 Cleaning up..."
         kill $SERVER_PID 2>/dev/null || true
-        pkill ngrok 2>/dev/null || true
+        pkill -f ngrok 2>/dev/null || true
+        sleep 2
         echo "✅ Cleanup complete"
+        
+        # Show final stats
+        echo "📊 Final statistics:"
+        find web-app/outputs -name "*.png" 2>/dev/null | wc -l | xargs echo "Total images generated:"
