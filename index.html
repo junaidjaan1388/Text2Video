@@ -3,119 +3,112 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎨 AI Image Generator</title>
+    <title>Stable Diffusion Image Generator</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; color: #333; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh; color: white; 
         }
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; margin-bottom: 30px; color: white; }
-        .header h1 { font-size: 2.5rem; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
-        .main-content { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
+        .main-content { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
         @media (max-width: 768px) { .main-content { grid-template-columns: 1fr; } }
         .card { 
-            background: white; border-radius: 15px; padding: 30px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2); transition: transform 0.3s ease;
+            background: rgba(255,255,255,0.1); backdrop-filter: blur(10px);
+            border-radius: 15px; padding: 30px; border: 1px solid rgba(255,255,255,0.2);
         }
-        .card:hover { transform: translateY(-5px); }
         .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #4a5568; }
-        textarea, select, input { 
-            width: 100%; padding: 12px; border: 2px solid #e2e8f0; 
-            border-radius: 8px; font-size: 16px; transition: border-color 0.3s ease;
+        label { display: block; margin-bottom: 8px; font-weight: 600; }
+        textarea, input { 
+            width: 100%; padding: 12px; background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; 
+            color: white; font-size: 16px;
         }
-        textarea:focus, select:focus, input:focus { outline: none; border-color: #667eea; }
+        textarea:focus, input:focus { outline: none; border-color: #4fc3f7; }
         textarea { resize: vertical; min-height: 100px; font-family: inherit; }
         .generate-btn {
-            width: 100%; background: linear-gradient(135deg, #667eea, #764ba2); color: white;
-            border: none; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold;
-            cursor: pointer; transition: all 0.3s ease;
+            width: 100%; background: linear-gradient(135deg, #4fc3f7, #29b6f6);
+            color: white; border: none; padding: 15px; border-radius: 8px;
+            font-size: 18px; font-weight: bold; cursor: pointer;
+            transition: all 0.3s ease;
         }
-        .generate-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
-        .generate-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-        .image-container { text-align: center; margin-bottom: 20px; }
+        .generate-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(79, 195, 247, 0.4); }
+        .generate-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .image-container { text-align: center; }
         #generatedImage { 
-            max-width: 100%; max-height: 500px; border-radius: 10px; 
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1); display: none;
+            max-width: 100%; border-radius: 10px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: none;
         }
-        .placeholder-image {
-            width: 100%; height: 300px; background: linear-gradient(45deg, #f0f0f0, #e0e0e0);
-            border-radius: 10px; display: flex; align-items: center; justify-content: center;
-            color: #999; font-size: 1.1rem;
+        .placeholder {
+            width: 100%; height: 512px; background: rgba(255,255,255,0.05);
+            border-radius: 10px; display: flex; align-items: center; 
+            justify-content: center; color: #ccc;
         }
         .status {
-            padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;
-            font-weight: 500;
+            padding: 15px; border-radius: 8px; margin: 20px 0;
+            text-align: center; font-weight: 500;
         }
-        .status.success { background: #c6f6d5; color: #2d3748; border: 1px solid #9ae6b4; }
-        .status.error { background: #fed7d7; color: #2d3748; border: 1px solid #feb2b2; }
-        .status.info { background: #bee3f8; color: #2d3748; border: 1px solid #90cdf4; }
+        .status.info { background: rgba(33, 150, 243, 0.3); }
+        .status.success { background: rgba(76, 175, 80, 0.3); }
+        .status.error { background: rgba(244, 67, 54, 0.3); }
+        .slider-container { display: flex; align-items: center; gap: 15px; }
+        .slider-value { min-width: 40px; text-align: center; font-weight: bold; }
         .download-btn {
-            width: 100%; background: linear-gradient(135deg, #48bb78, #38a169); color: white;
-            border: none; padding: 12px; border-radius: 8px; font-size: 16px; font-weight: bold;
-            cursor: pointer; transition: all 0.3s ease; display: none;
+            width: 100%; background: linear-gradient(135deg, #66bb6a, #4caf50);
+            color: white; border: none; padding: 12px; border-radius: 8px;
+            font-size: 16px; margin-top: 15px; cursor: pointer; display: none;
         }
-        .download-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(72, 187, 120, 0.4); }
-        .loading { display: none; text-align: center; padding: 20px; }
-        .spinner {
-            border: 4px solid #f3f3f3; border-top: 4px solid #667eea; border-radius: 50%;
-            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); }
-        }
-        .footer { text-align: center; color: white; margin-top: 40px; opacity: 0.8; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎨 AI Image Generator</h1>
-            <p>Transform your imagination into stunning visuals</p>
+            <h1>🎨 Stable Diffusion AI</h1>
+            <p>Generate images with state-of-the-art AI models</p>
         </div>
 
         <div class="main-content">
-            <div class="card input-section">
-                <h2>Create Your Image</h2>
+            <div class="card">
+                <h2>Create Image</h2>
                 <form id="imageForm">
                     <div class="form-group">
-                        <label for="prompt">Describe your image:</label>
-                        <textarea id="prompt" placeholder="A beautiful sunset over mountains, digital art style..." required>A beautiful sunset over mountains, digital art</textarea>
+                        <label for="prompt">Prompt:</label>
+                        <textarea id="prompt" placeholder="Describe the image you want to generate...">A beautiful sunset over mountains, digital art</textarea>
                     </div>
                     <div class="form-group">
-                        <label for="steps">Inference Steps: <span id="stepsValue">20</span></label>
-                        <input type="range" id="steps" min="5" max="50" value="20" step="1" style="width: 100%;">
+                        <label>Steps: <span id="stepsValue">20</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="steps" min="10" max="50" value="20" step="1" style="flex: 1;">
+                            <span class="slider-value" id="stepsDisplay">20</span>
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="guidance">Guidance Scale: <span id="guidanceValue">7.5</span></label>
-                        <input type="range" id="guidance" min="1" max="20" value="7.5" step="0.5" style="width: 100%;">
+                        <label>Guidance: <span id="guidanceValue">7.5</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="guidance" min="1" max="20" value="7.5" step="0.5" style="flex: 1;">
+                            <span class="slider-value" id="guidanceDisplay">7.5</span>
+                        </div>
                     </div>
                     <button type="submit" class="generate-btn" id="generateBtn">
                         ✨ Generate Image
                     </button>
                 </form>
-                <div class="loading" id="loading">
-                    <div class="spinner"></div>
-                    <p>Generating your image...</p>
-                </div>
-                <div class="status info" id="status">Ready to generate amazing images!</div>
+                <div class="status info" id="status">Ready to generate images</div>
             </div>
 
-            <div class="card output-section">
+            <div class="card">
                 <h2>Generated Image</h2>
                 <div class="image-container">
-                    <div class="placeholder-image" id="placeholder">Your image will appear here</div>
-                    <img id="generatedImage" alt="Generated AI Image">
+                    <div class="placeholder" id="placeholder">
+                        Your image will appear here
+                    </div>
+                    <img id="generatedImage" alt="AI Generated Image">
                 </div>
                 <button class="download-btn" id="downloadBtn">📥 Download Image</button>
             </div>
-        </div>
-
-        <div class="footer">
-            <p>Powered by GitHub Actions | Images are saved automatically</p>
         </div>
     </div>
 
@@ -127,29 +120,35 @@
         const guidanceSlider = document.getElementById('guidance');
         const guidanceValue = document.getElementById('guidanceValue');
         const generateBtn = document.getElementById('generateBtn');
-        const loading = document.getElementById('loading');
         const status = document.getElementById('status');
         const placeholder = document.getElementById('placeholder');
         const generatedImage = document.getElementById('generatedImage');
         const downloadBtn = document.getElementById('downloadBtn');
 
-        stepsSlider.addEventListener('input', () => stepsValue.textContent = stepsSlider.value);
-        guidanceSlider.addEventListener('input', () => guidanceValue.textContent = guidanceSlider.value);
+        // Update slider displays
+        stepsSlider.addEventListener('input', () => {
+            stepsValue.textContent = stepsSlider.value;
+            stepsDisplay.textContent = stepsSlider.value;
+        });
+
+        guidanceSlider.addEventListener('input', () => {
+            guidanceValue.textContent = guidanceSlider.value;
+            guidanceDisplay.textContent = guidanceSlider.value;
+        });
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const prompt = promptInput.value.trim();
             if (!prompt) {
-                showStatus('Please enter a prompt description', 'error');
+                showStatus('Please enter a prompt', 'error');
                 return;
             }
 
             generateBtn.disabled = true;
-            loading.style.display = 'block';
-            placeholder.style.display = 'none';
+            placeholder.style.display = 'flex';
             generatedImage.style.display = 'none';
             downloadBtn.style.display = 'none';
-            showStatus('Generating your image...', 'info');
+            showStatus('Generating image... This may take 30-60 seconds', 'info');
 
             try {
                 const response = await fetch('/generate', {
@@ -168,16 +167,15 @@
                 const imageUrl = URL.createObjectURL(blob);
                 generatedImage.src = imageUrl;
                 generatedImage.style.display = 'block';
+                placeholder.style.display = 'none';
                 downloadBtn.style.display = 'block';
                 showStatus('✅ Image generated successfully!', 'success');
                 
             } catch (error) {
                 console.error('Error:', error);
-                showStatus('❌ Failed to generate image. Please try again.', 'error');
-                placeholder.style.display = 'flex';
+                showStatus('❌ Failed to generate image', 'error');
             } finally {
                 generateBtn.disabled = false;
-                loading.style.display = 'none';
             }
         });
 
@@ -185,14 +183,14 @@
             if (generatedImage.src) {
                 const link = document.createElement('a');
                 link.href = generatedImage.src;
-                link.download = `ai-image-${Date.now()}.png`;
+                link.download = `stable-diffusion-${Date.now()}.png`;
                 link.click();
             }
         });
 
         function showStatus(message, type) {
             status.textContent = message;
-            status.className = 'status ' + type;
+            status.className = `status ${type}`;
         }
     </script>
 </body>
