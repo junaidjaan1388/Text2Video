@@ -1,57 +1,75 @@
-from flask import Flask, send_file, request, jsonify
+from flask import Flask, send_file, request, jsonify, send_from_directory
+from diffusers import StableDiffusionPipeline
+import torch
 from PIL import Image, ImageDraw
 import datetime
 import os
 import io
-import random
+import time
 
 app = Flask(__name__)
 
-def create_ai_image(prompt):
-    """Create a simulated AI-generated image"""
-    width, height = 512, 512
-    
-    # Create background with gradient
-    img = Image.new('RGB', (width, height), color='black')
+# Global model variable
+pipe = None
+model_loaded = False
+
+def load_model():
+    global pipe, model_loaded
+    try:
+        if model_loaded:
+            return True
+            
+        print("🔄 Loading Stable Diffusion model...")
+        start_time = time.time()
+        
+        # Use smaller model for faster loading
+        model_id = "runwayml/stable-diffusion-v1-5"
+        
+        pipe = StableDiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            use_safetensors=True,
+            safety_checker=None,  # Disable safety checker for speed
+            requires_safety_checker=False
+        )
+        pipe = pipe.to("cpu")
+        pipe.enable_attention_slicing()  # Reduce memory usage
+        
+        load_time = time.time() - start_time
+        model_loaded = True
+        print(f"✅ Model loaded in {load_time:.1f} seconds")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Model loading failed: {e}")
+        return False
+
+def create_placeholder_image(prompt, status="Loading model..."):
+    """Create a placeholder image while model loads"""
+    img = Image.new('RGB', (512, 512), color=(40, 40, 80))
     draw = ImageDraw.Draw(img)
     
-    # Create gradient background
-    for y in range(height):
-        r = int(50 + 100 * (y / height))
-        g = int(50 + 100 * ((height - y) / height))
-        b = int(100 + 100 * (y / height))
-        draw.line([(0, y), (width, y)], fill=(r, g, b), width=1)
-    
-    # Draw shapes based on prompt keywords
-    if 'sunset' in prompt.lower():
-        draw.ellipse([width//2-80, 100, width//2+80, 260], fill='orange')
-    if 'mountain' in prompt.lower():
-        points = [(100, height-100), (width//2, 150), (width-100, height-100)]
-        draw.polygon(points, fill='darkgreen')
-    if 'water' in prompt.lower() or 'ocean' in prompt.lower():
-        for i in range(3):
-            y_pos = height - 150 + i*20
-            draw.line([(0, y_pos), (width, y_pos)], fill='lightblue', width=3)
-    if 'forest' in prompt.lower():
-        for i in range(5):
-            x = random.randint(50, width-100)
-            draw.rectangle([x, height-200, x+30, height-100], fill='green')
+    # Draw border
+    draw.rectangle([10, 10, 502, 502], outline=(100, 100, 200), width=3)
     
     # Add text
     lines = [
-        "AI Generated Image",
+        "🎨 AI Image Generator",
+        "",
         f"Prompt: {prompt}",
-        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}",
-        "Simulated AI Art"
+        "",
+        status,
+        "",
+        "Powered by Stable Diffusion",
+        f"Time: {datetime.datetime.now().strftime('%H:%M:%S')}"
     ]
     
-    y_pos = height - 180
+    y_pos = 150
     for line in lines:
-        # Shadow
-        draw.text((52, y_pos+2), line, fill='black')
-        # Main text
-        draw.text((50, y_pos), line, fill='white')
-        y_pos += 25
+        text_width = len(line) * 9
+        x_pos = (512 - text_width) // 2
+        draw.text((x_pos, y_pos), line, fill=(200, 200, 255))
+        y_pos += 30
     
     return img
 
@@ -63,65 +81,90 @@ def serve_index():
 def generate_image():
     try:
         data = request.get_json()
-        prompt = data.get('prompt', 'A beautiful landscape')
-        model = data.get('model', 'runwayml/stable-diffusion-v1-5')
+        prompt = data.get('prompt', 'a beautiful landscape')
         steps = data.get('steps', 20)
         guidance = data.get('guidance', 7.5)
         
-        print(f"Generating image: {prompt}")
+        print(f"🎨 Generating: {prompt}")
         
-        # Create the image
-        image = create_ai_image(prompt)
+        # Load model if not loaded
+        if not load_model():
+            img = create_placeholder_image(prompt, "Model loading failed")
+            img_io = io.BytesIO()
+            img.save(img_io, 'PNG')
+            img_io.seek(0)
+            return send_file(img_io, mimetype='image/png')
         
-        # Ensure outputs directory exists
-        os.makedirs('outputs', exist_ok=True)
+        # Generate image with progress
+        print("⚡ Generating image...")
+        start_time = time.time()
         
-        # Save to outputs
+        with torch.no_grad():
+            image = pipe(
+                prompt=prompt,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                generator=torch.Generator(device="cpu").manual_seed(int(time.time()))
+            ).images[0]
+        
+        gen_time = time.time() - start_time
+        print(f"✅ Image generated in {gen_time:.1f} seconds")
+        
+        # Save image
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"outputs/image_{timestamp}.png"
         image.save(filename)
         
         # Log generation
         with open("outputs/generation_log.txt", "a") as f:
-            f.write(f"{timestamp} | {prompt} | {filename}\n")
+            f.write(f"{timestamp} | {prompt} | {steps} steps | {guidance} guidance | {filename}\n")
         
         # Convert to bytes for response
         img_io = io.BytesIO()
         image.save(img_io, 'PNG')
         img_io.seek(0)
         
-        print(f"✅ Image generated: {filename}")
         return send_file(img_io, mimetype='image/png')
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Generation error: {e}")
         # Return error image
-        error_img = Image.new('RGB', (512, 512), color='red')
-        draw = ImageDraw.Draw(error_img)
-        draw.text((50, 250), "Error generating image", fill='white')
+        img = create_placeholder_image("Error", f"Error: {str(e)[:50]}...")
         img_io = io.BytesIO()
-        error_img.save(img_io, 'PNG')
+        img.save(img_io, 'PNG')
         img_io.seek(0)
         return send_file(img_io, mimetype='image/png')
-
-@app.route('/images')
-def list_images():
-    """List all generated images"""
-    try:
-        images = [f for f in os.listdir('outputs') if f.endswith('.png')]
-        return jsonify({"images": images, "count": len(images)})
-    except:
-        return jsonify({"images": [], "count": 0})
 
 @app.route('/health')
 def health_check():
     return jsonify({
-        "status": "healthy", 
+        "status": "healthy",
+        "model_loaded": model_loaded,
         "timestamp": datetime.datetime.now().isoformat()
     })
 
+@app.route('/status')
+def status():
+    return jsonify({
+        "model_loaded": model_loaded,
+        "service": "Stable Diffusion API",
+        "version": "1.0"
+    })
+
 if __name__ == '__main__':
-    print("🚀 Starting AI Image Generator Server...")
     # Ensure outputs directory exists
     os.makedirs('outputs', exist_ok=True)
+    
+    print("🚀 Starting Text-to-Image Server...")
+    print("📦 Pre-loading model (this may take 2-3 minutes)...")
+    
+    # Pre-load model in background
+    def load_model_async():
+        load_model()
+    
+    import threading
+    thread = threading.Thread(target=load_model_async)
+    thread.daemon = True
+    thread.start()
+    
     app.run(host='0.0.0.0', port=5000, debug=False)
