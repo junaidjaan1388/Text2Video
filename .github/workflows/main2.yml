@@ -1,87 +1,24 @@
-name: Free Image to Video Generation
+name: ModelScope Video Generation
 
 on:
   workflow_dispatch:
     inputs:
-      image_url:
-        description: 'URL of input image'
-        required: true
       prompt:
-        description: 'Video description'
-        required: false
-        default: 'Animated version of the input image'
+        description: 'Text prompt for video'
+        required: true
 
 jobs:
-  generate-video:
+  generate:
     runs-on: ubuntu-latest-16core
-    timeout-minutes: 45
-    
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-
-    - name: Install dependencies
+    - name: Generate with ModelScope
       run: |
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install diffusers accelerate transformers opencv-python pillow requests
+        pip install modelscope torch
+        python -c "
+from modelscope.pipelines import pipeline
+from modelscope.utils.constant import Tasks
 
-    - name: Download and process image
-      run: |
-        mkdir -p inputs outputs
-        # Download image from URL
-        wget "${{ github.event.inputs.image_url }}" -O inputs/input_image.jpg
-        echo "✅ Image downloaded"
-
-    - name: Create video generation script
-      run: |
-        cat > generate_video.py << 'EOF'
-import torch
-from diffusers import StableVideoDiffusionPipeline
-from diffusers.utils import load_image, export_to_video
-import PIL.Image
-import os
-
-# Load pipeline
-pipe = StableVideoDiffusionPipeline.from_pretrained(
-    "stabilityai/stable-video-diffusion-img2vid-xt",
-    torch_dtype=torch.float16,
-    variant="fp16"
-)
-pipe.enable_model_cpu_offload()
-
-# Load and process image
-image = load_image("inputs/input_image.jpg")
-image = image.resize((1024, 576))
-
-# Generate video
-generator = torch.manual_seed(42)
-frames = pipe(
-    image,
-    decode_chunk_size=8,
-    generator=generator,
-    motion_bucket_id=180,
-    noise_aug_strength=0.1,
-    num_frames=25,
-).frames[0]
-
-# Export video
-export_to_video(frames, "outputs/generated_video.mp4", fps=7)
-print("✅ Video generated successfully!")
-EOF
-
-    - name: Generate video
-      run: |
-        echo "🎬 Generating video (this may take 10-15 minutes)..."
-        python generate_video.py
-
-    - name: Upload generated video
-      uses: actions/upload-artifact@v4
-      with:
-        name: generated-video
-        path: outputs/
-        retention-days: 7
+pipe = pipeline(Tasks.text_to_video_synthesis, 'damo/text-to-video-synthesis')
+result = pipe({'text': '${{ github.event.inputs.prompt }}'})
+print('Video generated:', result)
+"
