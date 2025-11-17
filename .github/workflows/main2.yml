@@ -41,7 +41,7 @@ jobs:
 
     - name: Create simplified Flask app
       run: |
-        cat > app.py << 'EOF'
+        cat > web-app/app.py << 'EOF'
 from flask import Flask, request, jsonify, send_file, render_template_string
 import os
 from datetime import datetime
