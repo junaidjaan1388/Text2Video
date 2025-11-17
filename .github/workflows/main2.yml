@@ -22,10 +22,11 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install Python dependencies
+    - name: Install dependencies
       run: |
-        
-        pip install flask pillow
+        python -m pip install --upgrade pip
+        pip install flask pillow requests torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers accelerate transformers
 
     - name: Install Ngrok
       run: |
@@ -40,99 +41,160 @@ jobs:
         ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
         echo "✅ Ngrok configured"
 
-    - name: Create outputs directory
-      run: mkdir -p web-app/outputs
-
-    - name: Start Flask server
+    - name: Create Flask application
       run: |
+        mkdir -p web-app/outputs
+        cat > web-app/app.py << 'EOF'
+from flask import Flask, request, jsonify, send_file
+import torch
+from diffusers import StableDiffusionPipeline
+import io
+import os
+from datetime import datetime
+import threading
+
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
+
+# Global variable for the model
+pipe = None
+model_loaded = False
+
+def load_model():
+    """Load the AI model in a separate thread"""
+    global pipe, model_loaded
+    try:
+        print("🔄 Loading AI model...")
+        # Use a smaller model for faster loading
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            torch_dtype=torch.float32,
+            safety_checker=None,
+            requires_safety_checker=False
+        )
+        model_loaded = True
+        print("✅ AI model loaded successfully!")
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy", 
+        "model_loaded": model_loaded,
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/generate', methods=['POST'])
+def generate_image():
+    if not model_loaded:
+        return jsonify({"error": "Model still loading, please try again in 30 seconds"}), 503
+    
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt', 'A beautiful landscape')
         
+        print(f"🎨 Generating image for: {prompt}")
+        
+        # Generate image
+        image = pipe(prompt, num_inference_steps=20, guidance_scale=7.5).images[0]
+        
+        # Save image
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"image_{timestamp}.png"
+        filepath = os.path.join('outputs', filename)
+        
+        image.save(filepath)
+        
+        # Return image as response
+        img_io = io.BytesIO()
+        image.save(img_io, 'PNG')
+        img_io.seek(0)
+        
+        return send_file(img_io, mimetype='image/png', as_attachment=True, download_name=filename)
+        
+    except Exception as e:
+        print(f"❌ Generation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/test')
+def test():
+    """Test endpoint that returns a simple generated image"""
+    if not model_loaded:
+        return jsonify({"error": "Model still loading"}), 503
+    
+    try:
+        image = pipe("a beautiful sunset over mountains", num_inference_steps=10).images[0]
+        img_io = io.BytesIO()
+        image.save(img_io, 'PNG')
+        img_io.seek(0)
+        return send_file(img_io, mimetype='image/png')
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    # Start model loading in background
+    thread = threading.Thread(target=load_model)
+    thread.daemon = True
+    thread.start()
+    
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+
+    - name: Start Flask server and load model
+      run: |
+        cd web-app
         python app.py &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
-        # Wait for server to start
-        echo "⏳ Waiting for server..."
-        for i in {1..30}; do
+        # Wait longer for server and model to load
+        echo "⏳ Waiting for server and AI model to load (this can take 2-5 minutes)..."
+        for i in {1..60}; do
           if curl -s http://localhost:5000/health > /dev/null 2>&1; then
-            echo "✅ Server is healthy after $((i*2)) seconds"
-            break
+            echo "✅ Server is running after $((i*5)) seconds"
+            # Check if model is loaded
+            response=$(curl -s http://localhost:5000/health)
+            if echo "$response" | grep -q "true"; then
+              echo "🤖 AI model loaded and ready!"
+              break
+            else
+              echo "⏳ Model still loading..."
+            fi
           fi
-          if [ $i -eq 30 ]; then
-            echo "❌ Server failed to start"
+          if [ $i -eq 60 ]; then
+            echo "❌ Server/model failed to start properly"
             exit 1
           fi
-          sleep 2
+          sleep 5
         done
 
     - name: Start Ngrok tunnel
       run: |
         echo "🌐 Starting Ngrok tunnel..."
-        # Start ngrok and keep it running
         ngrok http 5000 --log=stdout > ngrok.log 2>&1 &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
-        
-        # Give ngrok more time to initialize
-        echo "Waiting for Ngrok to initialize..."
-        sleep 15
+        sleep 10
 
     - name: Get Ngrok public URL
       id: ngrok_url
       run: |
         echo "🔗 Getting Ngrok URL..."
-        
-        # Multiple methods to get the URL
-        max_attempts=12
+        max_attempts=10
         for i in $(seq 1 $max_attempts); do
-          echo "Attempt $i to get Ngrok URL..."
-          
-          # Method 1: Try ngrok API
-          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
-            URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*\.ngrok\.io' | head -1)
-            if [ -n "$URL" ]; then
-              echo "✅ Ngrok URL found via API: $URL"
-              echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
-              break
-            fi
-          fi
-          
-          # Method 2: Check ngrok logs
-          if [ -f ngrok.log ]; then
-            URL=$(grep -o 'url=https://[^ ]*\.ngrok\.io' ngrok.log | head -1 | cut -d= -f2)
-            if [ -n "$URL" ]; then
-              echo "✅ Ngrok URL found in logs: $URL"
-              echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
-              break
-            fi
-          fi
-          
-          # Method 3: Try different API endpoint
-          URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    tunnels = data.get('tunnels', [])
-    if tunnels:
-        print(tunnels[0].get('public_url', ''))
-except:
-    pass
-" || echo "")
-          
-          if [ -n "$URL" ] && [ "$URL" != "null" ]; then
-            echo "✅ Ngrok URL found via JSON: $URL"
+          URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o 'https://[^"]*\.ngrok\.io' | head -1)
+          if [ -n "$URL" ]; then
+            echo "✅ Ngrok URL found: $URL"
             echo "ngrok_url=$URL" >> $GITHUB_OUTPUT
             break
           fi
-          
-          if [ $i -eq $max_attempts ]; then
-            echo "❌ Could not get Ngrok URL after $max_attempts attempts"
-            echo "Ngrok logs:"
-            cat ngrok.log
-            # Create a placeholder URL to continue
-            echo "ngrok_url=https://placeholder.ngrok.io" >> $GITHUB_OUTPUT
-          fi
-          
-          sleep 5
+          sleep 3
         done
+        
+        if [ -z "$URL" ]; then
+          echo "❌ Could not get Ngrok URL"
+          exit 1
+        fi
 
     - name: Display connection information
       run: |
@@ -146,31 +208,12 @@ except:
         echo "✨ ========================================="
         echo ""
         echo "📝 How to use:"
-        echo "   1. Open the URL above"
-        echo "   2. Enter your prompt"
-        echo "   3. Click 'Generate Image'"
-        echo "   4. Wait for your image"
-        echo "   5. Images are saved automatically"
-
-    - name: Test public access
-      run: |
-        URL="${{ steps.ngrok_url.outputs.ngrok_url }}"
-        if [ "$URL" != "https://placeholder.ngrok.io" ]; then
-          echo "Testing public access to: $URL"
-          if curl -s "$URL/health" > /dev/null 2>&1; then
-            echo "✅ Public access working!"
-          else
-            echo "⚠️  Cannot access via public URL (this might be normal during startup)"
-          fi
-        else
-          echo "⚠️  Using placeholder URL - check Ngrok configuration"
-        fi
+        echo "   Send a POST request to: ${{ steps.ngrok_url.outputs.ngrok_url }}/generate"
+        echo "   With JSON body: {\"prompt\": \"your image description here\"}"
 
     - name: Keep service running
       run: |
         echo "🕐 AI Image Generator active for 20 minutes..."
-        echo "🌐 Your public URL: ${{ steps.ngrok_url.outputs.ngrok_url }}"
-        echo ""
         echo "📊 Monitoring service status..."
         
         for i in {1..120}; do
@@ -178,14 +221,12 @@ except:
           seconds=$((i%6*10))
           echo "[$(date +%H:%M:%S)] Active: ${minutes}m ${seconds}s"
           
-          # Check server health every 2 minutes
-          if [ $((i % 12)) -eq 0 ]; then
-            if curl -s http://localhost:5000/health > /dev/null; then
-              count=$(find web-app/outputs -name "*.png" 2>/dev/null | wc -l)
-              echo "   ✅ Server healthy | Images: $count"
-            else
-              echo "   ❌ Server down"
-            fi
+          # Check server health
+          if curl -s "${{ steps.ngrok_url.outputs.ngrok_url }}/health" > /dev/null; then
+            count=$(find web-app/outputs -name "*.png" 2>/dev/null | wc -l)
+            echo "   ✅ Service healthy | Images: $count"
+          else
+            echo "   ❌ Service unavailable"
           fi
           
           sleep 10
@@ -198,16 +239,16 @@ except:
         name: ai-images
         path: web-app/outputs/
         retention-days: 30
-        if-no-files-found: warn
+        if-no-files-found: ignore
 
     - name: Cleanup
       if: always()
       run: |
         echo "🧹 Cleaning up..."
-        kill $SERVER_PID 2>/dev/null || true
-        pkill -f ngrok 2>/dev/null || true
+        # Kill processes
+        pkill -f "python.*app.py" || true
+        pkill -f ngrok || true
         sleep 2
-        echo "✅ Cleanup complete"
         
         # Show final stats
         echo "📊 Final statistics:"
