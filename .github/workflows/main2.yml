@@ -1,4 +1,4 @@
-name: Simple Ngrok Tunnel
+name: Text-to-Image Diffuser
 
 on:
   workflow_dispatch:
@@ -10,13 +10,29 @@ on:
         type: number
 
 jobs:
-  ngrok-tunnel:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  text-to-image:
+    runs-on: ubuntu-latest-20-04
+    timeout-minutes: 120
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1 libglib2.0-0
+
+    - name: Install Python dependencies
+      run: |
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        pip install diffusers transformers accelerate pillow
 
     - name: Install Ngrok
       run: |
@@ -28,42 +44,32 @@ jobs:
       run: |
         ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    - name: Start application
+    - name: Start Text-to-Image server
       run: |
-        # Start your app.py if it exists, otherwise use the simple server
-        if [ -f "app.py" ]; then
-          python3 app.py --port ${{ github.event.inputs.port }} &
-        else
-          python3 -m http.server ${{ github.event.inputs.port }} &
-        fi
+        python app.py --port ${{ github.event.inputs.port }} &
         echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 5
+        sleep 10
 
     - name: Start tunnel and get URL
       run: |
         ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
-        sleep 10
+        sleep 15
         
-        # Get public URL
         TUNNEL_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
         echo "Public URL: $TUNNEL_URL"
         echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
 
     - name: Display tunnel info
       run: |
-        echo "🎯 Your application is now publicly accessible at:"
-        echo "🔗 $TUNNEL_URL"
-        echo ""
-        echo "📁 Serving files from repository:"
-        ls -la
-        echo ""
-        echo "⏰ Tunnel will auto-close in 30 minutes"
+        echo "🎨 Text-to-Image Diffuser is now live!"
+        echo "🔗 Public URL: $TUNNEL_URL"
+        echo "⏰ Tunnel will run for 2 hours"
 
     - name: Wait for timeout
       run: |
-        sleep 1800
-        echo "⏰ Timeout reached - shutting down"
+        # Wait for 2 hours (7200 seconds)
+        sleep 7200
 
     - name: Cleanup
       if: always()
