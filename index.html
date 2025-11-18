@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Image Diffuser</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .app-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+
+        @media (max-width: 768px) {
+            .app-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .input-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .prompt-input {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .prompt-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .generate-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 18px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .generate-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .generate-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .output-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .image-container {
+            width: 100%;
+            aspect-ratio: 1;
+            border: 2px dashed #e1e5e9;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: #f8f9fa;
+        }
+
+        .image-container img {
+            max-width: 100%;
+            max-height: 100%;
+            display: none;
+        }
+
+        .placeholder {
+            color: #6c757d;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            color: #667eea;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .success {
+            color: #155724;
+            background: #d4edda;
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Text-to-Image Diffuser</h1>
+            <p>Transform your words into stunning AI-generated images</p>
+        </div>
+
+        <div class="app-container">
+            <div class="input-section">
+                <textarea 
+                    class="prompt-input" 
+                    placeholder="Describe the image you want to generate... 
+Example: A beautiful sunset over mountains, digital art" 
+                    id="prompt"></textarea>
+                
+                <button class="generate-btn" id="generateBtn">Generate Image</button>
+                
+                <div class="status" id="status">
+                    <strong>Status:</strong> <span id="statusText">Checking server...</span>
+                </div>
+
+                <div class="error" id="error"></div>
+                <div class="success" id="success"></div>
+            </div>
+
+            <div class="output-section">
+                <div class="image-container">
+                    <div class="placeholder" id="placeholder">
+                        🎨 Your generated image will appear here
+                    </div>
+                    <img id="generatedImage" alt="Generated image">
+                </div>
+                
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Generating your image... This may take a minute.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class TextToImageApp {
+            constructor() {
+                this.generateBtn = document.getElementById('generateBtn');
+                this.promptInput = document.getElementById('prompt');
+                this.generatedImage = document.getElementById('generatedImage');
+                this.placeholder = document.getElementById('placeholder');
+                this.loading = document.getElementById('loading');
+                this.statusText = document.getElementById('statusText');
+                this.errorDiv = document.getElementById('error');
+                this.successDiv = document.getElementById('success');
+                
+                this.init();
+            }
+            
+            init() {
+                this.generateBtn.addEventListener('click', () => this.generateImage());
+                this.promptInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && e.ctrlKey) {
+                        this.generateImage();
+                    }
+                });
+                
+                this.checkServerStatus();
+            }
+            
+            async checkServerStatus() {
+                try {
+                    const response = await fetch('/status');
+                    const data = await response.json();
+                    
+                    if (data.model_loaded) {
+                        this.statusText.textContent = `Ready (${data.device.toUpperCase()})`;
+                        this.statusText.style.color = '#28a745';
+                    } else {
+                        this.statusText.textContent = 'Loading model...';
+                        this.statusText.style.color = '#ffc107';
+                    }
+                } catch (error) {
+                    this.statusText.textContent = 'Server not responding';
+                    this.statusText.style.color = '#dc3545';
+                }
+            }
+            
+            async generateImage() {
+                const prompt = this.promptInput.value.trim();
+                
+                if (!prompt) {
+                    this.showError('Please enter a prompt description');
+                    return;
+                }
+                
+                this.setLoading(true);
+                this.hideMessages();
+                
+                try {
+                    const response = await fetch('/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ prompt })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Generation failed');
+                    }
+                    
+                    if (data.success) {
+                        this.displayImage(data.image);
+                        this.showSuccess('Image generated successfully!');
+                    } else {
+                        throw new Error('Generation failed');
+                    }
+                    
+                } catch (error) {
+                    this.showError(`Failed to generate image: ${error.message}`);
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+            
+            displayImage(imageData) {
+                this.generatedImage.src = imageData;
+                this.generatedImage.style.display = 'block';
+                this.placeholder.style.display = 'none';
+            }
+            
+            setLoading(loading) {
+                this.generateBtn.disabled = loading;
+                this.loading.style.display = loading ? 'block' : 'none';
+                this.generateBtn.textContent = loading ? 'Generating...' : 'Generate Image';
+            }
+            
+            showError(message) {
+                this.errorDiv.textContent = message;
+                this.errorDiv.style.display = 'block';
+                this.successDiv.style.display = 'none';
+            }
+            
+            showSuccess(message) {
+                this.successDiv.textContent = message;
+                this.successDiv.style.display = 'block';
+                this.errorDiv.style.display = 'none';
+            }
+            
+            hideMessages() {
+                this.errorDiv.style.display = 'none';
+                this.successDiv.style.display = 'none';
+            }
+        }
+        
+        // Initialize the app when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new TextToImageApp();
+        });
+    </script>
+</body>
+</html>
