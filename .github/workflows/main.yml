@@ -1,4 +1,4 @@
-name: Ngrok Tunnel Setup
+name: Simple Ngrok Tunnel
 
 on:
   workflow_dispatch:
@@ -8,257 +8,48 @@ on:
         required: true
         default: 8080
         type: number
-      timeout_minutes:
-        description: 'How long to keep tunnel active (minutes)'
-        required: false
-        default: 30
-        type: number
 
 jobs:
   ngrok-tunnel:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes + 5 }}
+    timeout-minutes: 60
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y jq curl python3
-
     - name: Install Ngrok
       run: |
-        # Download and install ngrok
-        wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-        tar -xzf ngrok.tgz
-        chmod +x ngrok
-        sudo mv ngrok /usr/local/bin/
-        ngrok version
+        curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+        echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+        sudo apt update && sudo apt install ngrok
 
-    - name: Setup Ngrok authentication
+    - name: Setup Ngrok
       run: |
-        if [ -n "${{ secrets.NGROK_AUTH_TOKEN }}" ]; then
-          ngrok authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
-          echo "✅ Ngrok authentication configured"
-        else
-          echo "⚠️  No NGROK_AUTH_TOKEN secret found - using free version (limited)"
-        fi
+        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
     - name: Start test server
       run: |
-        # Create a better test server with health endpoint
-        cat > server.py << 'EOF'
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
-import time
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            response = {
-                "status": "healthy",
-                "timestamp": time.time(),
-                "service": "Test Server"
-            }
-            self.wfile.write(json.dumps(response).encode())
-        else:
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            html = f"""
-            <html>
-                <head><title>Test Server</title></head>
-                <body>
-                    <h1>🚀 Test Server Running!</h1>
-                    <p><strong>Port:</strong> ${{ github.event.inputs.port }}</p>
-                    <p><strong>Time:</strong> {time.ctime()}</p>
-                    <p><strong>Health Check:</strong> <a href="/health">/health</a></p>
-                </body>
-            </html>
-            """
-            self.wfile.write(html.encode())
-    
-    def log_message(self, format, *args):
-        print(f"[{self.client_address[0]}] {format % args}")
-
-print(f"Starting test server on port ${{ github.event.inputs.port }}...")
-server = HTTPServer(('0.0.0.0', ${{ github.event.inputs.port }}), SimpleHandler)
-server.serve_forever()
-EOF
-
-        # Start the test server
-        python3 server.py &
+        python3 -m http.server ${{ github.event.inputs.port }} &
         echo "SERVER_PID=$!" >> $GITHUB_ENV
-        sleep 3
-        
-        # Test local server
-        if curl -s http://localhost:${{ github.event.inputs.port }}/health > /dev/null; then
-          echo "✅ Test server started successfully on port ${{ github.event.inputs.port }}"
-        else
-          echo "❌ Failed to start test server"
-          exit 1
-        fi
+        sleep 2
 
-    - name: Start Ngrok tunnel
+    - name: Start tunnel and get URL
       run: |
-        echo "🌐 Starting Ngrok tunnel..."
-        
-        # Start ngrok with more detailed logging
-        ngrok http ${{ github.event.inputs.port }} --log=stdout --log-level=debug > ngrok.log 2>&1 &
+        ngrok http ${{ github.event.inputs.port }} --log=stdout > ngrok.log &
         echo "NGROK_PID=$!" >> $GITHUB_ENV
+        sleep 10
         
-        echo "✅ Ngrok process started (PID: $!)"
-        echo "Waiting for tunnel to initialize..."
-        sleep 15
+        # Get public URL
+        TUNNEL_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+        echo "Public URL: $TUNNEL_URL"
+        echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
 
-    - name: Get Ngrok public URL
-      id: ngrok_url
+    - name: Wait for timeout
       run: |
-        echo "🔗 Retrieving Ngrok public URL..."
-        
-        max_attempts=15
-        for attempt in $(seq 1 $max_attempts); do
-          echo "Attempt $attempt/$max_attempts..."
-          
-          # Method 1: Try ngrok API
-          if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
-            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[] | select(.proto == "https") | .public_url' | head -1)
-            
-            if [ -n "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ]; then
-              echo "✅ Ngrok URL found via API: $NGROK_URL"
-              echo "ngrok_url=$NGROK_URL" >> $GITHUB_OUTPUT
-              echo "NGROK_PUBLIC_URL=$NGROK_URL" >> $GITHUB_ENV
-              break
-            fi
-          fi
-          
-          # Method 2: Check logs
-          if [ -f ngrok.log ]; then
-            LOG_URL=$(grep -oE 'url=https://[a-zA-Z0-9.-]+\.ngrok(-free)?\.app' ngrok.log | head -1 | cut -d= -f2)
-            if [ -n "$LOG_URL" ]; then
-              echo "✅ Ngrok URL found in logs: $LOG_URL"
-              echo "ngrok_url=$LOG_URL" >> $GITHUB_OUTPUT
-              echo "NGROK_PUBLIC_URL=$LOG_URL" >> $GITHUB_ENV
-              break
-            fi
-          fi
-          
-          if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Failed to get Ngrok URL after $max_attempts attempts"
-            echo "Debug info:"
-            echo "Ngrok process:"
-            ps aux | grep ngrok || true
-            echo "Ngrok logs:"
-            tail -50 ngrok.log
-            exit 1
-          fi
-          
-          sleep 5
-        done
-
-    - name: Display tunnel information
-      run: |
-        echo ""
-        echo "=========================================="
-        echo "🎯 NGROK TUNNEL ACTIVE"
-        echo "=========================================="
-        echo "📡 Public URL: $NGROK_PUBLIC_URL"
-        echo "🔌 Local Port: ${{ github.event.inputs.port }}"
-        echo "⏱️  Timeout: ${{ github.event.inputs.timeout_minutes }} minutes"
-        echo "=========================================="
-        echo ""
-        echo "📊 Quick Test:"
-        echo "   Health: $NGROK_PUBLIC_URL/health"
-        echo "   Main:   $NGROK_PUBLIC_URL"
-        echo ""
-        echo "🔧 Tunnel Details:"
-        curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[] | "   \(.name): \(.public_url) -> \(.config.addr)"' || echo "   Cannot get tunnel details"
-
-    - name: Test tunnel connection
-      run: |
-        echo "🧪 Testing tunnel connection..."
-        
-        if curl -f -s --retry 3 --retry-delay 2 "$NGROK_PUBLIC_URL/health" > /dev/null; then
-          echo "✅ Tunnel connection successful!"
-          echo "Health check response:"
-          curl -s "$NGROK_PUBLIC_URL/health" | jq '.' || curl -s "$NGROK_PUBLIC_URL/health"
-        else
-          echo "⚠️  Direct health check failed"
-          echo "Trying main endpoint..."
-          if curl -s "$NGROK_PUBLIC_URL" > /dev/null; then
-            echo "✅ Main endpoint is accessible"
-          else
-            echo "❌ Tunnel test failed - check Ngrok configuration"
-          fi
-        fi
-
-    - name: Keep tunnel alive with monitoring
-      run: |
-        TIMEOUT_MINUTES=${{ github.event.inputs.timeout_minutes }}
-        echo "🕐 Keeping tunnel active for $TIMEOUT_MINUTES minutes..."
-        echo "🔗 Public URL: $NGROK_PUBLIC_URL"
-        echo ""
-        echo "📝 You can now:"
-        echo "   1. Share this URL with others"
-        echo "   2. Test your local service remotely"
-        echo "   3. The tunnel will auto-close after $TIMEOUT_MINUTES minutes"
-        echo ""
-        
-        # Calculate monitoring intervals
-        TOTAL_INTERVALS=$((TIMEOUT_MINUTES * 6))  # Check every 10 seconds
-        HEALTH_CHECK_INTERVAL=12  # Check health every 2 minutes
-        
-        for ((i=1; i<=TOTAL_INTERVALS; i++)); do
-          minutes=$((i/6))
-          seconds=$((i%6*10))
-          echo "[$(date +'%H:%M:%S')] Active: ${minutes}m ${seconds}s | URL: $NGROK_PUBLIC_URL"
-          
-          # Health check every 2 minutes
-          if [ $((i % HEALTH_CHECK_INTERVAL)) -eq 0 ]; then
-            if curl -s "$NGROK_PUBLIC_URL/health" > /dev/null 2>&1; then
-              echo "   ✅ Remote: Healthy | Local: Port ${{ github.event.inputs.port }}"
-            else
-              echo "   ⚠️  Remote: Unreachable | Local: Checking..."
-              # Check local server
-              if curl -s http://localhost:${{ github.event.inputs.port }}/health > /dev/null 2>&1; then
-                echo "   ❌ Remote tunnel issue (local server is healthy)"
-              else
-                echo "   🔴 Local server down"
-              fi
-            fi
-          fi
-          
-          sleep 10
-        done
-        
-        echo "⏰ Timeout reached - shutting down tunnel"
-
-    - name: Upload logs for debugging
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ngrok-logs
-        path: |
-          ngrok.log
-        retention-days: 1
+        echo "🔄 Tunnel active at: $TUNNEL_URL"
+        echo "⏰ Running for 30 minutes..."
+        sleep 1800
 
     - name: Cleanup
       if: always()
       run: |
-        echo "🧹 Cleaning up processes..."
-        # Kill ngrok process
-        pkill -f "ngrok http" || true
-        # Kill test server
+        pkill ngrok || true
         kill $SERVER_PID 2>/dev/null || true
-        # Wait for processes to exit
-        sleep 3
-        echo "✅ Cleanup complete"
-        
-        # Final status
-        echo "📊 Final status:"
-        ps aux | grep -E "(ngrok|python3)" | grep -v grep || echo "No processes running"
