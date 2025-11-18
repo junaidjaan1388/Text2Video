@@ -3,195 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stable Diffusion Image Generator</title>
+    <title>My GitHub Pages App</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            min-height: 100vh; color: white; 
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
         }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
-        .main-content { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
-        @media (max-width: 768px) { .main-content { grid-template-columns: 1fr; } }
-        .card { 
-            background: rgba(255,255,255,0.1); backdrop-filter: blur(10px);
-            border-radius: 15px; padding: 30px; border: 1px solid rgba(255,255,255,0.2);
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
         }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; }
-        textarea, input { 
-            width: 100%; padding: 12px; background: rgba(255,255,255,0.1);
-            border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; 
-            color: white; font-size: 16px;
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
         }
-        textarea:focus, input:focus { outline: none; border-color: #4fc3f7; }
-        textarea { resize: vertical; min-height: 100px; font-family: inherit; }
-        .generate-btn {
-            width: 100%; background: linear-gradient(135deg, #4fc3f7, #29b6f6);
-            color: white; border: none; padding: 15px; border-radius: 8px;
-            font-size: 18px; font-weight: bold; cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .generate-btn:hover { transform: scale(1.02); box-shadow: 0 5px 15px rgba(79, 195, 247, 0.4); }
-        .generate-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .image-container { text-align: center; }
-        #generatedImage { 
-            max-width: 100%; border-radius: 10px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: none;
-        }
-        .placeholder {
-            width: 100%; height: 512px; background: rgba(255,255,255,0.05);
-            border-radius: 10px; display: flex; align-items: center; 
-            justify-content: center; color: #ccc;
-        }
-        .status {
-            padding: 15px; border-radius: 8px; margin: 20px 0;
-            text-align: center; font-weight: 500;
-        }
-        .status.info { background: rgba(33, 150, 243, 0.3); }
-        .status.success { background: rgba(76, 175, 80, 0.3); }
-        .status.error { background: rgba(244, 67, 54, 0.3); }
-        .slider-container { display: flex; align-items: center; gap: 15px; }
-        .slider-value { min-width: 40px; text-align: center; font-weight: bold; }
-        .download-btn {
-            width: 100%; background: linear-gradient(135deg, #66bb6a, #4caf50);
-            color: white; border: none; padding: 12px; border-radius: 8px;
-            font-size: 16px; margin-top: 15px; cursor: pointer; display: none;
+        .info {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🎨 Stable Diffusion AI</h1>
-            <p>Generate images with state-of-the-art AI models</p>
+        <h1>🚀 My Application</h1>
+        <p>This application is being served via GitHub Actions + Ngrok</p>
+        
+        <div class="info">
+            <h3>📊 Status</h3>
+            <p><strong>Service:</strong> ✅ Running</p>
+            <p><strong>Port:</strong> 8080</p>
+            <p><strong>Tunnel:</strong> Active via Ngrok</p>
         </div>
 
-        <div class="main-content">
-            <div class="card">
-                <h2>Create Image</h2>
-                <form id="imageForm">
-                    <div class="form-group">
-                        <label for="prompt">Prompt:</label>
-                        <textarea id="prompt" placeholder="Describe the image you want to generate...">A beautiful sunset over mountains, digital art</textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>Steps: <span id="stepsValue">20</span></label>
-                        <div class="slider-container">
-                            <input type="range" id="steps" min="10" max="50" value="20" step="1" style="flex: 1;">
-                            <span class="slider-value" id="stepsDisplay">20</span>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Guidance: <span id="guidanceValue">7.5</span></label>
-                        <div class="slider-container">
-                            <input type="range" id="guidance" min="1" max="20" value="7.5" step="0.5" style="flex: 1;">
-                            <span class="slider-value" id="guidanceDisplay">7.5</span>
-                        </div>
-                    </div>
-                    <button type="submit" class="generate-btn" id="generateBtn">
-                        ✨ Generate Image
-                    </button>
-                </form>
-                <div class="status info" id="status">Ready to generate images</div>
-            </div>
+        <div class="info">
+            <h3>🔗 Links</h3>
+            <p><a href="/" style="color: #fff;">Home</a></p>
+            <p><a href="/health" style="color: #fff;">Health Check</a></p>
+        </div>
 
-            <div class="card">
-                <h2>Generated Image</h2>
-                <div class="image-container">
-                    <div class="placeholder" id="placeholder">
-                        Your image will appear here
-                    </div>
-                    <img id="generatedImage" alt="AI Generated Image">
-                </div>
-                <button class="download-btn" id="downloadBtn">📥 Download Image</button>
-            </div>
+        <div class="info">
+            <h3>📝 About</h3>
+            <p>This page is served from your GitHub repository and exposed to the internet using Ngrok tunnel.</p>
         </div>
     </div>
-
-    <script>
-        const form = document.getElementById('imageForm');
-        const promptInput = document.getElementById('prompt');
-        const stepsSlider = document.getElementById('steps');
-        const stepsValue = document.getElementById('stepsValue');
-        const guidanceSlider = document.getElementById('guidance');
-        const guidanceValue = document.getElementById('guidanceValue');
-        const generateBtn = document.getElementById('generateBtn');
-        const status = document.getElementById('status');
-        const placeholder = document.getElementById('placeholder');
-        const generatedImage = document.getElementById('generatedImage');
-        const downloadBtn = document.getElementById('downloadBtn');
-
-        // Update slider displays
-        stepsSlider.addEventListener('input', () => {
-            stepsValue.textContent = stepsSlider.value;
-            stepsDisplay.textContent = stepsSlider.value;
-        });
-
-        guidanceSlider.addEventListener('input', () => {
-            guidanceValue.textContent = guidanceSlider.value;
-            guidanceDisplay.textContent = guidanceSlider.value;
-        });
-
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const prompt = promptInput.value.trim();
-            if (!prompt) {
-                showStatus('Please enter a prompt', 'error');
-                return;
-            }
-
-            generateBtn.disabled = true;
-            placeholder.style.display = 'flex';
-            generatedImage.style.display = 'none';
-            downloadBtn.style.display = 'none';
-            showStatus('Generating image... This may take 30-60 seconds', 'info');
-
-            try {
-                const response = await fetch('/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        prompt: prompt,
-                        steps: parseInt(stepsSlider.value),
-                        guidance: parseFloat(guidanceSlider.value)
-                    })
-                });
-
-                if (!response.ok) throw new Error('Generation failed');
-                
-                const blob = await response.blob();
-                const imageUrl = URL.createObjectURL(blob);
-                generatedImage.src = imageUrl;
-                generatedImage.style.display = 'block';
-                placeholder.style.display = 'none';
-                downloadBtn.style.display = 'block';
-                showStatus('✅ Image generated successfully!', 'success');
-                
-            } catch (error) {
-                console.error('Error:', error);
-                showStatus('❌ Failed to generate image', 'error');
-            } finally {
-                generateBtn.disabled = false;
-            }
-        });
-
-        downloadBtn.addEventListener('click', () => {
-            if (generatedImage.src) {
-                const link = document.createElement('a');
-                link.href = generatedImage.src;
-                link.download = `stable-diffusion-${Date.now()}.png`;
-                link.click();
-            }
-        });
-
-        function showStatus(message, type) {
-            status.textContent = message;
-            status.className = `status ${type}`;
-        }
-    </script>
 </body>
 </html>
